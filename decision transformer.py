@@ -95,10 +95,10 @@ with torch.no_grad():
 class Env:
     def __init__(self, args):
         self.device = args.device
-        player1 = Player(1, "Alice")
-        player2 = Player(2, "Bob")
-        player3 = Player(3, "Carol")
-        self.game = Game([player1, player2, player3])
+        self.player1 = Player(1, "Alice")
+        self.player2 = Player(2, "Bob")
+        self.player3 = Player(3, "Carol")
+        self.game = Game([self.player1, self.player2, self.player3])
         self.state_machine = GameStateMachine(GameStateStart(self.game))
         self.state_machine.handle_action(StartGameAction())
         self.bidding = True
@@ -140,8 +140,11 @@ class Env:
         # if self.bidding:
         #     self.state_machine.handle_action(action)
         # else:
+
         self.state_machine.handle_action(action)
-        reward += self.game.  # self.ale.act(self.actions.get(action))
+        reward += self.player1.current_trick_points   # only the last points of the trick are relevant
+
+        # self.ale.act(self.actions.get(action))
 
         # Return state, reward
         return torch.stack(self.state_machine.current_state), reward

@@ -12,7 +12,7 @@ class Player:
         self.type = None
         self.cards = list()
         self.trick_stack = dict()  # {game_round: [(player, card), ...]}
-        self.cardPoints = 0
+        self.current_trick_points = 0
 
     def sum_trick_values(self):
         sum_tricks = 0
@@ -21,7 +21,7 @@ class Player:
                 sum_tricks += entry[1].get_value()
 
         return sum_tricks
-        # return self.cardPoints
+
 
     def has_card(self, card):
         return card in self.cards

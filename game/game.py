@@ -22,7 +22,25 @@ class Game:
         self.create_deck()
 
     def finish_trick(self):
-        trick_winner = self.trick.get_winner(self.game_variant)
+        trick_winner, current_trick_points = self.trick.get_winner(self.game_variant)
+
+        # TODO: play with the reward settings
+        # update current trick points: the party winning this trick get a reward of the points
+        if trick_winner is self.get_declarer():
+            trick_winner.current_trick_points = current_trick_points
+            for player in self.players:
+                if player is not trick_winner:
+                    # both players of the counter party receive a negative reward
+                    player.current_trick_points = -current_trick_points
+        else:
+            for player in self.players:
+                if player is not self.get_declarer():
+                    # both players of the counter party receive the reward
+                    player.current_trick_points = current_trick_points
+                else:
+                    # the declarer receives a negative reward
+                    player.current_trick_points = -current_trick_points
+
         # add trick to players trick_stack
         trick_winner.trick_stack[self.round] = self.trick.stack
         # trick_winner.cardPoints += self.trick.stack
@@ -34,6 +52,8 @@ class Game:
         self.trick = Trick([trick_winner, second_player, third_player])
         # set trick leader for next round
         self.trick.leader = trick_winner
+
+        # return current_trick_points
 
     def get_dealer(self):
         return self.players[self.dealer]
@@ -138,8 +158,10 @@ class Trick:
 
         highest_card = game_variant.get_highest_card(list(trick_map))
 
-        # get winner for this trick
-        return trick_map[highest_card]
+        current_trick_points = sum(map(Card.get_value, list(trick_map)))
+
+        # get winner and the points for this trick
+        return trick_map[highest_card], current_trick_points
 
     def is_complete(self):
         return len(self.stack) == 3

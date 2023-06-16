@@ -43,7 +43,7 @@ class GameStatePlay(GameState):
             raise InvalidPlayerMove("Card " + str(card) + "is not a valid move by player " + player.name)
 
     def finish_trick(self):
-        self.game.finish_trick()
+        current_trick_points = self.game.finish_trick()
         # check if game is over
         if self.game.round is Game.MAX_ROUNDS:
             self.finish_game()
