@@ -53,7 +53,7 @@ class Game:
         # set trick leader for next round
         self.trick.leader = trick_winner
 
-        # return current_trick_points
+    # TODO: surrender
 
     def get_dealer(self):
         return self.players[self.dealer]
