@@ -158,9 +158,6 @@ skat_dm_game_data_frame["Miscall"].value_counts(normalize=True)
 skat_dm_game_data_frame["Surrendered"].value_counts(normalize=True)
 
 
-#%%
-
-skat_dm_game_data_frame["Miscall"].value_counts(normalize=True)
 
 #%%
 
