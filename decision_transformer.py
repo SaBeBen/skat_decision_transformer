@@ -28,7 +28,7 @@ model = DecisionTransformerModel()
 
 
 training_args = TrainingArguments(
-    output_dir="trainingOutput",
+    output_dir="training_output",
     learning_rate=2e-5,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=8,
@@ -134,7 +134,6 @@ class Env:
         self.game.reset()
 
     def step(self, action):
-        # TODO: handleAction in GameStateMachine?
         reward = 0
 
         # if self.bidding:

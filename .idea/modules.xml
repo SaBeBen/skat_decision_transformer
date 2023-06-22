@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/Skat Decision Transformer.iml" filepath="$PROJECT_DIR$/.idea/Skat Decision Transformer.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/skat_decision_transformer.iml" filepath="$PROJECT_DIR$/.idea/skat_decision_transformer.iml" />
     </modules>
   </component>
 </project>

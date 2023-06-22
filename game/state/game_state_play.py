@@ -22,7 +22,7 @@ class GameStatePlay(GameState):
         self.check_valid_card_play(player, card)
         self.game.trick.add(player, card)
         player.cards.remove(card)
-        print("Player " + player.name + " played " + str(card))
+        # print("Player " + player.name + " played " + str(card))
 
         if self.game.trick.is_complete():
             self.finish_trick()
