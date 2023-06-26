@@ -2,6 +2,8 @@ import torch
 import pandas as pd
 from transformers import DecisionTransformerModel, DecisionTransformerConfig
 
+import gym
+
 from game.game import Game
 from game.game_state_machine import GameStateMachine
 from game.state.game_state_start import GameStateStart, StartGameAction
@@ -13,88 +15,10 @@ from transformers import AutoTokenizer
 from transformers import DataCollatorWithPadding
 from transformers import Trainer
 
-# from datasets import load_dataset
-
-
-# select available cudas for faster matrix computation
-device = torch.device("cuda")
-
-# one could use pretrained, but in our case we need our own model
-# model = DecisionTransformerModel.from_pretrained("edbeeching/decision-transformer-gym-hopper-medium")
-# model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased")
-
-configuration = DecisionTransformerConfig()
-model = DecisionTransformerModel()
-
-
-training_args = TrainingArguments(
-    output_dir="training_output",
-    learning_rate=2e-5,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    num_train_epochs=2,
-)
-
-
-skat_data_path = ""
-
-skat_data_frame = pd.read_csv(skat_data_path)
-
-dataset = skat_data_frame
-
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
-
-def tokenize_dataset(dataset):
-    return tokenizer(dataset["text"])
-
-
-dataset = dataset.map(tokenize_dataset, batched=True)
-
-data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
-
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=dataset["train"],
-    eval_dataset=dataset["test"],
-    tokenizer=tokenizer,
-    data_collator=data_collator,
-)  # doctest: +SKIP
-
-# evaluation
-model = model.to(device)
-model.eval()
-
-env = gym.make("Hopper-v3")
-state_dim = env.observation_space.shape[0]
-act_dim = env.action_space.shape[0]
-
-state = env.reset()
-states = torch.from_numpy(state).reshape(1, 1, state_dim).to(device=device, dtype=torch.float32)
-actions = torch.zeros((1, 1, act_dim), device=device, dtype=torch.float32)
-rewards = torch.zeros(1, 1, device=device, dtype=torch.float32)
-target_return = torch.tensor(TARGET_RETURN, dtype=torch.float32).reshape(1, 1)
-timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
-attention_mask = torch.zeros(1, 1, device=device, dtype=torch.float32)
-
-# forward pass
-with torch.no_grad():
-    state_preds, action_preds, return_preds = model(
-        states=states,
-        actions=actions,
-        rewards=rewards,
-        returns_to_go=target_return,
-        timesteps=timesteps,
-        attention_mask=attention_mask,
-        return_dict=False,
-    )
-
-
-# ------------------------------------------------
 
 class Env:
-    def __init__(self, args):
-        self.device = args.device
+    def __init__(self, current_device):
+        self.device = current_device
         self.player1 = Player(1, "Alice")
         self.player2 = Player(2, "Bob")
         self.player3 = Player(3, "Carol")
@@ -141,7 +65,7 @@ class Env:
         # else:
 
         self.state_machine.handle_action(action)
-        reward += self.player1.current_trick_points   # only the last points of the trick are relevant
+        reward += self.player1.current_trick_points  # only the last points of the trick are relevant
 
         # self.ale.act(self.actions.get(action))
 
@@ -158,3 +82,83 @@ class Env:
 
     def action_space(self):
         return len(self.actions)
+
+
+# from datasets import load_dataset
+
+
+# select available cudas for faster matrix computation
+device = torch.device("cuda")
+
+# one could use pretrained, but in our case we need our own model
+# model = DecisionTransformerModel.from_pretrained("edbeeching/decision-transformer-gym-hopper-medium")
+# model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased")
+
+configuration = DecisionTransformerConfig()
+model = DecisionTransformerModel()
+
+training_args = TrainingArguments(
+    output_dir="training_output",
+    learning_rate=2e-5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    num_train_epochs=2,
+)
+
+skat_data_path = ""  # TODO: set path independently
+
+skat_data_frame = pd.read_csv(skat_data_path)
+
+dataset = skat_data_frame
+
+tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")    # TODO: connect with Skat tokenizer
+
+
+def tokenize_dataset(dataset):
+    return tokenizer(dataset["text"])
+
+
+dataset = dataset.map(tokenize_dataset, batched=True)
+
+data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset["train"],
+    eval_dataset=dataset["test"],
+    tokenizer=tokenizer,
+    data_collator=data_collator,
+)  # doctest: +SKIP
+
+# evaluation
+model = model.to(device)
+model.eval()
+
+# env = Env(device)
+env = gym.make("Hopper-v3")
+state_dim = env.observation_space.shape[0]   # state size
+act_dim = env.action_space.shape[0]     # action size
+
+TARGET_RETURN = 61
+
+state = env.reset()
+states = torch.from_numpy(state).reshape(1, 1, state_dim).to(device=device, dtype=torch.float32)
+actions = torch.zeros((1, 1, act_dim), device=device, dtype=torch.float32)
+rewards = torch.zeros(1, 1, device=device, dtype=torch.float32)
+target_return = torch.tensor(TARGET_RETURN, dtype=torch.float32).reshape(1, 1)
+timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
+attention_mask = torch.zeros(1, 1, device=device, dtype=torch.float32)
+
+# forward pass
+with torch.no_grad():
+    state_preds, action_preds, return_preds = model(
+        states=states,
+        actions=actions,
+        rewards=rewards,
+        returns_to_go=target_return,
+        timesteps=timesteps,
+        attention_mask=attention_mask,
+        return_dict=False,
+    )
+

@@ -1,6 +1,6 @@
 import timeit
 
-setupSnippet = "from game.game import Game \n" \
+setup_snippet = "from game.game import Game \n" \
                "from game.game_state_machine import GameStateMachine \n" \
                "from game.game_variant import GameVariantGrand \n" \
                "from game.state.game_state_bid import BidCallAction, BidAcceptAction, BidPassAction, PickUpSkatAction, PutDownSkatAction, DeclareGameVariantAction \n" \
@@ -9,7 +9,7 @@ setupSnippet = "from game.game import Game \n" \
                "from model.card import Card \n" \
                "from model.player import Player \n"
 
-testedSnippet = '''
+tested_snippet = '''
 player1 = Player(1, "Alice")
 player2 = Player(2, "Bob")
 player3 = Player(3, "Carol")
@@ -90,6 +90,6 @@ state_machine.handle_action(PlayCardAction(player2, Card(Card.Suit.DIAMOND, Card
 
 '''
 
-exTime = timeit.timeit(stmt=testedSnippet, setup=setupSnippet, number=10000)
+ex_time = timeit.timeit(stmt=tested_snippet, setup=setup_snippet, number=10000)
 
-print(f"Execution time of one run: {exTime/10000} ")
+print(f"Execution time of one run: {ex_time/10000} ")

@@ -1,4 +1,4 @@
-#%%
+# %%
 
 import numpy as np
 import pandas as pd
@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import random
 from sklearn.model_selection import train_test_split
 
-#%%
+# %%
 
 """The dataset of the sequence the cards (cs) were played follows"""
 skat_wm_cs_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/data/dl/wm_skattisch_kf.CSV"
@@ -17,36 +17,51 @@ skat_wm_cs_data_frame = pd.read_csv(skat_wm_cs_data_path, header=None)
 # ♦, ♥, ♠, ♣, {7, 8, 9, Q, K, 10, A}, J/T
 skat_wm_cs_data = skat_wm_cs_data_frame
 
-skat_wm_cs_data.columns = ["GameID", "Sd1", "Sd2", "KNr0", "KNr1", "KNr2", "KNr3", "KNr4", "KNr5", "KNr6", "KNr7",
-                           "KNr8", "KNr9", "KNr10", "KNr11", "KNr12", "KNr13", "KNr14", "KNr15", "KNr16", "KNr17",
-                           "KNr18", "KNr19", "KNr20", "KNr21", "KNr22", "KNr23", "KNr24", "KNr25", "KNr26", "KNr27",
-                           "KNr28", "KNr29", "KNr30", "KNr31", "SurrenderedAt"]
+skat_wm_cs_data.columns = ["GameID", "Sd1", "Sd2", "CNr0", "CNr1", "CNr2", "CNr3", "CNr4", "CNr5", "CNr6", "CNr7",
+                           "CNr8", "CNr9", "CNr10", "CNr11", "CNr12", "CNr13", "CNr14", "CNr15", "CNr16", "CNr17",
+                           "CNr18", "CNr19", "CNr20", "CNr21", "CNr22", "CNr23", "CNr24", "CNr25", "CNr26", "CNr27",
+                           "CNr28", "CNr29", "CNr30", "CNr31", "SurrenderedAt"]
 
-#%%
+# %%
+
+skat_wm_cs_data.info(memory_usage="deep")
+
+skat_wm_cs_data_frame.select_dtypes(include=['int'])
+# converted_int = gl_int.apply(pd.to_numeric,downcast='unsigned')
+
+# %%
 
 # Sanity Checks
 
-#%%
+# %%
+
+skat_wm_cs_data
+print(skat_wm_cs_data.loc[1, :])
+
+# %%
 
 print(skat_wm_cs_data_frame.isna().sum().sum())
 
-#%%
+# %%
 
 print(skat_wm_cs_data_frame["GameID"].size)
 
-#%%
+# %%
 
 print(skat_wm_cs_data_frame["GameID"].duplicated().any())
 
-#%%
+# %%
+
+print(skat_wm_cs_data_frame.loc[1, :])
+
+# %%
 
 skat_wm_table_data = skat_wm_cs_data_frame
 
-head = skat_wm_cs_data.head(n=10)
+head = skat_wm_cs_data.head(n=20)
 print(head)
 
-
-#%%
+# %%
 
 """The table dataset follows"""
 skat_wm_table_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/data/dl/wm_skattisch.CSV"
@@ -58,26 +73,26 @@ skat_wm_table_data_frame.columns = ["IDTable", "Name", "Number", "PlayerID1", "P
 
 skat_wm_table_data_frame
 
-#%%
+# %%
 
 # Sanity Checks
 
 print(skat_wm_table_data_frame.isna().sum())
 
-#%%
+# %%
 
 print(skat_wm_table_data_frame["IDTable"].size)
 
-#%%
+# %%
 
 print(skat_wm_table_data_frame["IDTable"].duplicated().any())
 
-#%%
+# %%
 
 head = skat_wm_table_data_frame.head(n=10)
 print(head)
 
-#%%
+# %%
 
 """The game dataset follows"""
 
@@ -96,73 +111,79 @@ skat_wm_game_data_frame.columns = ["GameID", "IDGame", "IDTable", "IDVServer", "
                                    "CardPointsPlayer", "AllPassed", "Surrendered", "PlayerPosAtTableFH",
                                    "PlayerPosAtTableMH", "PlayerPosAtTableBH"]
 
-#%%
+# %%
 
-head = skat_wm_game_data_frame.head(n=10)
+head = skat_wm_game_data_frame.head(n=20)
 print(head)
 
-#%% Sanity Checks
+# %%
+print(skat_wm_game_data_frame.iloc[1, 0:2])
+
+print(skat_wm_game_data_frame.iloc[1, 9:41])
+
+print(skat_wm_game_data_frame.iloc[1, 59:60])
+
+# %% Sanity Checks
 
 skat_wm_game_data_frame[["CallValueFH", "CallValueMH", "CallValueBH", "PlayerID", "Game",
                          "With", "Without", "Hand", "Schneider", "SchneiderCalled", "Schwarz",
                          "SchwarzCalled", "Overt", "PointsPlayer", "Won", "Miscall",
                          "CardPointsPlayer", "AllPassed", "Surrendered"]].describe()
 
-#%%
+# %%
 
 skat_wm_game_data_frame[["CallValueFH", "CallValueMH", "CallValueBH", "PlayerPosAtTableFH", "PlayerPosAtTableMH",
                          "PlayerPosAtTableBH"]].describe()
 
-#%%
+# %%
 
 print(skat_wm_game_data_frame.isna().sum().sum())
 
-#%%
+# %%
 
 print(skat_wm_game_data_frame["GameID"].size)
 
-#%%
+# %%
 
 print(skat_wm_game_data_frame["GameID"].duplicated().any())
 
-#%%
+# %%
 
 print(skat_wm_game_data_frame["IDGame"].duplicated().any())
 
-#%%
+# %%
 
 skat_wm_game_data_frame["Won"].value_counts(normalize=True)
 
-#%%
+# %%
 
 skat_wm_game_data_frame["Schneider"].value_counts(normalize=True)
 
-#%%
+# %%
 
 skat_wm_game_data_frame["Schwarz"].value_counts(normalize=True)
 
-#%%
+# %%
 
 skat_wm_game_data_frame["Game"].value_counts()
 
-#%%
+# %%
 
 skat_wm_game_data_frame["AllPassed"].value_counts(normalize=True)
 
-#%%
+# %%
 
 skat_wm_game_data_frame["Miscall"].value_counts(normalize=True)
 
-#%%
+# %%
 
 skat_wm_game_data_frame["Surrendered"].value_counts(normalize=True)
 
-
-#%%
+# %%
 
 # Data Visualisation
 
-#%%
+# %%
 
 # Analysis of games
 game_variants = skat_wm_game_data_frame["Game"].value_counts(normalize=True)
@@ -172,14 +193,14 @@ game_variants = game_variants.rename(
 game_variants["Null"] += game_variants["Null Overt"] + game_variants["Null Hand"] + game_variants["Null Overt Hand"]
 game_variants = game_variants.drop(labels=["Null Overt", "Null Hand", "Null Overt Hand"])
 
-#%%
+# %%
 
 # Create a pie plot showing the relative occurrence of game variants in all games
 game_variants.plot(kind="pie", y="Game", autopct='%1.0f%%')
 plt.savefig("graphics/all_games_pie_wm.png")
 plt.show()
 
-#%%
+# %%
 
 # Filter the games that were won
 games_won = skat_wm_game_data_frame[skat_wm_game_data_frame["Won"] == 1]
@@ -191,7 +212,7 @@ game_variants_won = game_variants_won.rename(
 game_variants_won.loc["AllPassed"] = 0.0
 game_variants_won
 
-#%%
+# %%
 
 # Filter the games that were lost
 games_lost = skat_wm_game_data_frame[skat_wm_game_data_frame["Won"] == 0]
@@ -202,13 +223,13 @@ game_variants_lost = game_variants_lost.rename(
            46: "Null Overt", 59: "Null Overt Hand", 35: "Null Hand"})
 game_variants_lost
 
-#%%
+# %%
 
 # Drop the games were all passed for the comparison with the won games
 # game_variants_lost = game_variants_lost.drop(["AllPassed"])
 
 
-#%%
+# %%
 
 # direct comparison of lost and won games
 comp_won_lost = pd.DataFrame({"won": game_variants_won,
@@ -216,9 +237,10 @@ comp_won_lost = pd.DataFrame({"won": game_variants_won,
 comp_won_lost.plot.barh()
 plt.savefig("graphics/comp_won_lost_wm.png")
 plt.show()
-#%%
+# %%
 
-game_variants_won["Null"] += game_variants_won["Null Overt"] + game_variants_won["Null Hand"] + game_variants_won["Null Overt Hand"]
+game_variants_won["Null"] += game_variants_won["Null Overt"] + game_variants_won["Null Hand"] + game_variants_won[
+    "Null Overt Hand"]
 game_variants_won = game_variants_won.drop(labels=["Null Overt", "Null Hand", "Null Overt Hand", "AllPassed"])
 
 # Create a pie plot showing the relative occurrence of game variants in won games
@@ -226,19 +248,47 @@ game_variants_won.plot(kind="pie", y="Game", autopct='%1.0f%%')
 plt.savefig("graphics/won_games_pie_wm.png")
 plt.show()
 
-#%%
+# %%
 
 # Data Cleansing
 
-#%%
+# %%
 
 # Drop irrelevant information
 games_clean = skat_wm_game_data_frame.drop(["IDVServer", "StartTime", "EndTime"], axis=1)
 
 
-#%%
+# %%
+games_clean.info(memory_usage="deep")
 
+games_clean.select_dtypes(include=['int'])
+
+# %%
+# Optimizing memory space
+games_clean.iloc[:, 3:] = games_clean.iloc[:, 3:].apply(pd.to_numeric, downcast="unsigned")
+
+# games_clean.iloc[:, 6:38] = games_clean.iloc[:, 6:38].apply(pd.to_numeric, downcast="")
+
+games_clean.info(memory_usage="deep")
+# %%
 # convert data to following encoding:
+# ♦, ♥, ♠, ♣, {7, 8, 9, Q, K, 10, A, J}, T
+# with respect to their position
+def convert_cs(cards, trump):
+    converted_cs_cards = []
+
+    # for every card in the cs data frame, convert the card by it's input and store it in
+    # the order the cards were played
+    for i in range(30):
+        converted_cs_cards[3+cards.iloc[i]] = convert(i, trump=trump)
+
+    return converted_cs_cards
+
+
+# %%
+
+# ONLY FOR THE GAME DATA FRAME
+# convert cards to following encoding:
 # ♦, ♥, ♠, ♣, {7, 8, 9, Q, K, 10, A, J}, T
 def convert(card, trump):
     vector_rep = {
@@ -308,7 +358,7 @@ cards = ["Card1", "Card2", "Card3", "Card4", "Card5", "Card6", "Card7", "Card8",
 new_games_cards = pd.DataFrame(columns=cards)
 
 r = range(len(games_clean["Card1"]))
-r = range(100)
+r = range(10000)
 
 for j in cards:
     print("Check\n")
@@ -317,9 +367,15 @@ for j in cards:
         # games_clean.loc[i,j]
         new_games_cards.loc[i, j] = convert(games_clean.loc[i, j], games_clean["Game"][i])
 
-##%%
+
+# %%
+new_games_cards["Card1"].info(memory_usage="deep")
+
+
+# %%
 # games_clean["Card1"][1]
 new_games_cards
+
 # create train and test sets
 # skat_train, skat_test = train_test_split(skat_data, test_size=0.2, random_state=0)
 
