@@ -2,14 +2,13 @@ import torch
 import pandas as pd
 from transformers import DecisionTransformerModel, DecisionTransformerConfig
 
-import gym
-
 from game.game import Game
 from game.game_state_machine import GameStateMachine
 from game.state.game_state_start import GameStateStart, StartGameAction
-from model.player import Player
 
-from transformers import AutoModelForSequenceClassification
+from model.player import Player
+from model.card import Card
+
 from transformers import TrainingArguments
 from transformers import AutoTokenizer
 from transformers import DataCollatorWithPadding
@@ -27,31 +26,46 @@ class Env:
         self.state_machine.handle_action(StartGameAction())
         self.bidding = True
         self.training = True  # Consistent with model training mode
-
-        # self.ale = atari_py.ALEInterface()
-        # self.ale.setInt('random_seed', args.seed)
-        # self.ale.setInt('max_num_frames_per_episode', args.max_episode_length)
-        # self.ale.setFloat('repeat_action_probability', 0)  # Disable sticky actions
-        # self.ale.setInt('frame_skip', 0)
-        # self.ale.setBool('color_averaging', False)
-        # self.ale.loadROM(atari_py.get_game_path(args.game))  # ROM loading must be done after setting options
-        # actions = self.ale.getMinimalActionSet()
-
-        # self.actions = dict([i, e] for i, e in zip(range(len(actions)), actions))
-
-        # self.lives = 0  # Life counter (used in DeepMind training)
-        # self.life_termination = False  # Used to check if resetting only from loss of life
-        # self.window = args.history_length  # Number of frames to concatenate
-
-        # self.state_buffer = deque([], maxlen=args.history_length)
+        all_cards = [
+            [0, 0, 0, 1, 7, 0],  # A♣
+            [0, 0, 0, 1, 5, 0],  # K♣
+            [0, 0, 0, 1, 4, 0],  # Q♣
+            [0, 0, 0, 1, 8, 1],  # J♣
+            [0, 0, 0, 1, 6, 0],  # 10♣
+            [0, 0, 0, 1, 3, 0],  # 9♣
+            [0, 0, 0, 1, 2, 0],  # 8♣
+            [0, 0, 0, 1, 1, 0],  # 7♣
+            [0, 0, 0, 1, 7, 0],  # A♠
+            [0, 0, 0, 1, 5, 0],  # K♠
+            [0, 0, 1, 0, 4, 0],  # Q♠
+            [0, 0, 1, 0, 8, 1],  # J♠
+            [0, 0, 1, 0, 6, 0],  # 10♠
+            [0, 0, 1, 0, 3, 0],  # 9♠
+            [0, 0, 1, 0, 2, 0],  # 8♠
+            [0, 0, 1, 0, 1, 0],  # 7♠
+            [0, 1, 0, 0, 7, 0],  # A♥
+            [0, 1, 0, 0, 5, 0],  # K♥
+            [0, 1, 0, 0, 4, 0],  # Q♥
+            [0, 1, 0, 0, 8, 1],  # J♥
+            [0, 1, 0, 0, 6, 0],  # 10♥
+            [0, 1, 0, 0, 3, 0],  # 9♥
+            [0, 1, 0, 0, 2, 0],  # 8♥
+            [0, 1, 0, 0, 1, 0],  # 7♥
+            [1, 0, 0, 0, 7, 0],  # A♦
+            [1, 0, 0, 0, 5, 0],  # K♦
+            [1, 0, 0, 0, 4, 0],  # Q♦
+            [1, 0, 0, 0, 8, 1],  # J♦
+            [1, 0, 0, 0, 6, 0],  # 10♦
+            [1, 0, 0, 0, 3, 0],  # 9♦
+            [1, 0, 0, 0, 2, 0],  # 8♦
+            [1, 0, 0, 0, 1, 0]   # 7♦
+        ]
+        self.action_space = all_cards
+        self.observation_space = [[], all_cards, [all_cards, all_cards]]
 
     # def _get_state(self):
-    #     state = cv2.resize(self.ale.getScreenGrayscale(), (84, 84), interpolation=cv2.INTER_LINEAR)
+    #     state =
     #     return torch.tensor(state, dtype=torch.float32, device=self.device).div_(255)
-
-    # def _reset_buffer(self):
-    #     for _ in range(self.window):
-    #         self.state_buffer.append(torch.zeros(84, 84, device=self.device))
 
     def reset(self):
         # return torch.stack(list(self.state_buffer), 0)
@@ -60,28 +74,21 @@ class Env:
     def step(self, action):
         reward = 0
 
-        # if self.bidding:
+        # if isinstance(action, ):
         #     self.state_machine.handle_action(action)
         # else:
 
         self.state_machine.handle_action(action)
         reward += self.player1.current_trick_points  # only the last points of the trick are relevant
 
-        # self.ale.act(self.actions.get(action))
-
         # Return state, reward
         return torch.stack(self.state_machine.current_state), reward
 
-    # Uses loss of life as terminal signal
     def train(self):
         self.training = True
 
-    # Uses standard terminal signal
     def eval(self):
         self.training = False
-
-    def action_space(self):
-        return len(self.actions)
 
 
 # from datasets import load_dataset
@@ -111,54 +118,80 @@ skat_data_frame = pd.read_csv(skat_data_path)
 
 dataset = skat_data_frame
 
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")    # TODO: connect with Skat tokenizer
-
-
-def tokenize_dataset(dataset):
-    return tokenizer(dataset["text"])
-
-
-dataset = dataset.map(tokenize_dataset, batched=True)
-
-data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+# the dataset is already tokenized in the database
 
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=dataset["train"],
     eval_dataset=dataset["test"],
-    tokenizer=tokenizer,
-    data_collator=data_collator,
 )  # doctest: +SKIP
 
 # evaluation
 model = model.to(device)
 model.eval()
 
-# env = Env(device)
-env = gym.make("Hopper-v3")
-state_dim = env.observation_space.shape[0]   # state size
-act_dim = env.action_space.shape[0]     # action size
+env = Env(device)
+# env = gym.make("Hopper-v3")
+state_dim = env.observation_space
+act_dim = env.action_space
 
 TARGET_RETURN = 61
 
-state = env.reset()
-states = torch.from_numpy(state).reshape(1, 1, state_dim).to(device=device, dtype=torch.float32)
-actions = torch.zeros((1, 1, act_dim), device=device, dtype=torch.float32)
-rewards = torch.zeros(1, 1, device=device, dtype=torch.float32)
-target_return = torch.tensor(TARGET_RETURN, dtype=torch.float32).reshape(1, 1)
-timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
-attention_mask = torch.zeros(1, 1, device=device, dtype=torch.float32)
 
-# forward pass
-with torch.no_grad():
+# state = env.reset()
+# states = torch.from_numpy(state).reshape(1, 1, state_dim).to(device=device, dtype=torch.float32)
+# actions = torch.zeros((1, 1, act_dim), device=device, dtype=torch.float32)
+# rewards = torch.zeros(1, 1, device=device, dtype=torch.float32)
+# target_return = torch.tensor(TARGET_RETURN, dtype=torch.float32).reshape(1, 1)
+# timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
+# attention_mask = torch.zeros(1, 1, device=device, dtype=torch.float32)
+#
+# # forward pass
+# with torch.no_grad():
+#     state_preds, action_preds, return_preds = model(
+#         states=states,
+#         actions=actions,
+#         rewards=rewards,
+#         returns_to_go=target_return,
+#         timesteps=timesteps,
+#         attention_mask=attention_mask,
+#         return_dict=False,
+#     )
+
+
+# Function that gets an action from the model using autoregressive prediction
+# with a window of the previous 20 timesteps.
+def get_action(model, states, actions, rewards, returns_to_go, timesteps):
+    # This implementation does not condition on past rewards
+
+    states = states.reshape(1, -1, model.config.state_dim)
+    actions = actions.reshape(1, -1, model.config.act_dim)
+    returns_to_go = returns_to_go.reshape(1, -1, 1)
+    timesteps = timesteps.reshape(1, -1)
+
+    # The prediction is conditioned on up to 20 previous time-steps
+    states = states[:, -model.config.max_length:]
+    actions = actions[:, -model.config.max_length:]
+    returns_to_go = returns_to_go[:, -model.config.max_length:]
+    timesteps = timesteps[:, -model.config.max_length:]
+
+    # pad all tokens to sequence length, this is required if we process batches
+    padding = model.config.max_length - states.shape[1]
+    attention_mask = torch.cat([torch.zeros(padding), torch.ones(states.shape[1])])
+    attention_mask = attention_mask.to(dtype=torch.long).reshape(1, -1)
+    states = torch.cat([torch.zeros((1, padding, state_dim)), states], dim=1).float()
+    actions = torch.cat([torch.zeros((1, padding, act_dim)), actions], dim=1).float()
+    returns_to_go = torch.cat([torch.zeros((1, padding, 1)), returns_to_go], dim=1).float()
+    timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
+
+    # perform the prediction
     state_preds, action_preds, return_preds = model(
         states=states,
         actions=actions,
         rewards=rewards,
-        returns_to_go=target_return,
+        returns_to_go=returns_to_go,
         timesteps=timesteps,
         attention_mask=attention_mask,
-        return_dict=False,
-    )
-
+        return_dict=False, )
+    return action_preds[0, -1]

@@ -107,7 +107,7 @@ skat_wm_game_data_frame.columns = ["GameID", "IDGame", "IDTable", "IDVServer", "
                                    "Card23", "Card24", "Card25", "Card26", "Card27", "Card28", "Card29", "Card30",
                                    "Card31", "Card32", "CallValueFH", "CallValueMH", "CallValueBH", "PlayerID", "Game",
                                    "With", "Without", "Hand", "Schneider", "SchneiderCalled", "Schwarz",
-                                   "SchwarzCalled", "Overt", "PointsPlayer", "Won", "Miscall",
+                                   "SchwarzCalled", "Ouvert", "PointsPlayer", "Won", "Miscall",
                                    "CardPointsPlayer", "AllPassed", "Surrendered", "PlayerPosAtTableFH",
                                    "PlayerPosAtTableMH", "PlayerPosAtTableBH"]
 
@@ -127,7 +127,7 @@ print(skat_wm_game_data_frame.iloc[1, 59:60])
 
 skat_wm_game_data_frame[["CallValueFH", "CallValueMH", "CallValueBH", "PlayerID", "Game",
                          "With", "Without", "Hand", "Schneider", "SchneiderCalled", "Schwarz",
-                         "SchwarzCalled", "Overt", "PointsPlayer", "Won", "Miscall",
+                         "SchwarzCalled", "Ouvert", "PointsPlayer", "Won", "Miscall",
                          "CardPointsPlayer", "AllPassed", "Surrendered"]].describe()
 
 # %%
@@ -189,9 +189,9 @@ skat_wm_game_data_frame["Surrendered"].value_counts(normalize=True)
 game_variants = skat_wm_game_data_frame["Game"].value_counts(normalize=True)
 game_variants = game_variants.rename(
     index={24: "Grand", 12: "Cross", 11: "Spades", 10: "Hearts", 9: "Diamonds", 0: "AllPassed", 23: "Null",
-           46: "Null Overt", 59: "Null Overt Hand", 35: "Null Hand"})
-game_variants["Null"] += game_variants["Null Overt"] + game_variants["Null Hand"] + game_variants["Null Overt Hand"]
-game_variants = game_variants.drop(labels=["Null Overt", "Null Hand", "Null Overt Hand"])
+           46: "Null Ouvert", 59: "Null Ouvert Hand", 35: "Null Hand"})
+game_variants["Null"] += game_variants["Null Ouvert"] + game_variants["Null Hand"] + game_variants["Null Ouvert Hand"]
+game_variants = game_variants.drop(labels=["Null Ouvert", "Null Hand", "Null Ouvert Hand"])
 
 # %%
 
@@ -208,7 +208,7 @@ games_won = skat_wm_game_data_frame[skat_wm_game_data_frame["Won"] == 1]
 game_variants_won = games_won["Game"].value_counts(normalize=True)
 game_variants_won = game_variants_won.rename(
     index={24: "Grand", 12: "Cross", 11: "Spades", 10: "Hearts", 9: "Diamonds", 0: "AllPassed", 23: "Null",
-           46: "Null Overt", 59: "Null Overt Hand", 35: "Null Hand"})
+           46: "Null Ouvert", 59: "Null Ouvert Hand", 35: "Null Hand"})
 game_variants_won.loc["AllPassed"] = 0.0
 game_variants_won
 
@@ -220,7 +220,7 @@ games_lost = skat_wm_game_data_frame[skat_wm_game_data_frame["Won"] == 0]
 game_variants_lost = games_lost["Game"].value_counts(normalize=True)
 game_variants_lost = game_variants_lost.rename(
     index={24: "Grand", 12: "Cross", 11: "Spades", 10: "Hearts", 9: "Diamonds", 0: "AllPassed", 23: "Null",
-           46: "Null Overt", 59: "Null Overt Hand", 35: "Null Hand"})
+           46: "Null Ouvert", 59: "Null Ouvert Hand", 35: "Null Hand"})
 game_variants_lost
 
 # %%
@@ -239,9 +239,9 @@ plt.savefig("graphics/comp_won_lost_wm.png")
 plt.show()
 # %%
 
-game_variants_won["Null"] += game_variants_won["Null Overt"] + game_variants_won["Null Hand"] + game_variants_won[
-    "Null Overt Hand"]
-game_variants_won = game_variants_won.drop(labels=["Null Overt", "Null Hand", "Null Overt Hand", "AllPassed"])
+game_variants_won["Null"] += game_variants_won["Null Ouvert"] + game_variants_won["Null Hand"] + game_variants_won[
+    "Null Ouvert Hand"]
+game_variants_won = game_variants_won.drop(labels=["Null Ouvert", "Null Hand", "Null Ouvert Hand", "AllPassed"])
 
 # Create a pie plot showing the relative occurrence of game variants in won games
 game_variants_won.plot(kind="pie", y="Game", autopct='%1.0f%%')
@@ -347,7 +347,7 @@ def convert(card, trump):
 trump = 0
 
 games_clean.loc[:, "Card1":"Card32"].head(n=10)
-#
+
 # games_clean.loc[:, "Card1":"Card32"] = games_clean.loc[:, "Card1":"Card32"].apply(
 #     lambda card_list: card_list.apply(lambda card: convert(card, trump=trump)))
 
@@ -358,7 +358,7 @@ cards = ["Card1", "Card2", "Card3", "Card4", "Card5", "Card6", "Card7", "Card8",
 new_games_cards = pd.DataFrame(columns=cards)
 
 r = range(len(games_clean["Card1"]))
-r = range(10000)
+r = range(100000)
 
 for j in cards:
     print("Check\n")
@@ -369,7 +369,7 @@ for j in cards:
 
 
 # %%
-new_games_cards["Card1"].info(memory_usage="deep")
+# new_games_cards["Card1"].info(memory_usage="deep")
 
 
 # %%
