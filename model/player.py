@@ -22,7 +22,6 @@ class Player:
 
         return sum_tricks
 
-
     def has_card(self, card):
         return card in self.cards
 
@@ -39,6 +38,9 @@ class Player:
                 return True
 
         return False
+
+    def set_cards(self, cards):
+        self.cards = cards
 
     def __repr__(self):
         return "id=" + str(id) + "name=" + self.name + " cards=" + str(self.cards)

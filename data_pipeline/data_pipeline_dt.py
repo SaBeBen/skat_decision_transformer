@@ -155,9 +155,21 @@ skat_dt_game_data_frame["Miscall"].value_counts(normalize=True)
 
 #%%
 
-skat_dt_game_data_frame["Surrendered"].value_counts(normalize=True)
+skat_dt_game_data_frame["Surrendered"].value_counts()
 
+#%%
+skat_dt_cs_data["SurrenderedAt"].value_counts()
 
+#%%
+print(len(skat_dt_game_data_frame))
+
+#%%
+print(len(skat_dt_cs_data_frame))
+
+#%%
+skat_dt_cs_and_game_data = skat_dt_game_data_frame.join(skat_dt_cs_data, on="GameID", lsuffix='_caller', rsuffix='_other')
+
+skat_dt_cs_and_game_data.head(n=10)
 #%%
 
 # Data Visualisation
@@ -178,6 +190,9 @@ game_variants = game_variants.drop(labels=["Null Overt", "Null Hand", "Null Over
 game_variants.plot(kind="pie", y="Game", autopct='%1.0f%%')
 plt.savefig("graphics/all_games_pie_dt.png")
 plt.show()
+#%%
+
+skat_dt_game_data_frame["Surrendered"].value_counts(normalize=True)
 
 #%%
 
@@ -190,6 +205,7 @@ game_variants_won = game_variants_won.rename(
            46: "Null Overt", 59: "Null Overt Hand", 35: "Null Hand"})
 game_variants_won.loc["AllPassed"] = 0.0
 game_variants_won
+
 
 #%%
 

@@ -62,7 +62,6 @@ class Card:
         else:
             return 0
 
-
     def __init__(self, suit, face):
         self.suit = suit
         self.face = face

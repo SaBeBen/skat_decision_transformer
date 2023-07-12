@@ -13,8 +13,6 @@ skat_wm_cs_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/dat
 
 skat_wm_cs_data_frame = pd.read_csv(skat_wm_cs_data_path, header=None)
 
-# TODO: convert data to following encoding:
-# ♦, ♥, ♠, ♣, {7, 8, 9, Q, K, 10, A}, J/T
 skat_wm_cs_data = skat_wm_cs_data_frame
 
 skat_wm_cs_data.columns = ["GameID", "Sd1", "Sd2", "CNr0", "CNr1", "CNr2", "CNr3", "CNr4", "CNr5", "CNr6", "CNr7",
@@ -101,15 +99,15 @@ skat_wm_game_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/d
 skat_wm_game_data_frame = pd.read_csv(skat_wm_game_data_path, header=None)
 
 skat_wm_game_data_frame.columns = ["GameID", "IDGame", "IDTable", "IDVServer", "StartTime", "EndTime", "PlayerFH",
-                                   "PlayerMH", "PlayerBH", "Card1", "Card2", "Card3", "Card4", "Card5", "Card6",
+                                   "PlayerMH", "PlayerRH", "Card1", "Card2", "Card3", "Card4", "Card5", "Card6",
                                    "Card7", "Card8", "Card9", "Card10", "Card11", "Card12", "Card13", "Card14",
                                    "Card15", "Card16", "Card17", "Card18", "Card19", "Card20", "Card21", "Card22",
                                    "Card23", "Card24", "Card25", "Card26", "Card27", "Card28", "Card29", "Card30",
-                                   "Card31", "Card32", "CallValueFH", "CallValueMH", "CallValueBH", "PlayerID", "Game",
+                                   "Card31", "Card32", "CallValueFH", "CallValueMH", "CallValueRH", "PlayerID", "Game",
                                    "With", "Without", "Hand", "Schneider", "SchneiderCalled", "Schwarz",
                                    "SchwarzCalled", "Ouvert", "PointsPlayer", "Won", "Miscall",
                                    "CardPointsPlayer", "AllPassed", "Surrendered", "PlayerPosAtTableFH",
-                                   "PlayerPosAtTableMH", "PlayerPosAtTableBH"]
+                                   "PlayerPosAtTableMH", "PlayerPosAtTableRH"]
 
 # %%
 
@@ -125,15 +123,15 @@ print(skat_wm_game_data_frame.iloc[1, 59:60])
 
 # %% Sanity Checks
 
-skat_wm_game_data_frame[["CallValueFH", "CallValueMH", "CallValueBH", "PlayerID", "Game",
+skat_wm_game_data_frame[["CallValueFH", "CallValueMH", "CallValueRH", "PlayerID", "Game",
                          "With", "Without", "Hand", "Schneider", "SchneiderCalled", "Schwarz",
                          "SchwarzCalled", "Ouvert", "PointsPlayer", "Won", "Miscall",
                          "CardPointsPlayer", "AllPassed", "Surrendered"]].describe()
 
 # %%
 
-skat_wm_game_data_frame[["CallValueFH", "CallValueMH", "CallValueBH", "PlayerPosAtTableFH", "PlayerPosAtTableMH",
-                         "PlayerPosAtTableBH"]].describe()
+skat_wm_game_data_frame[["CallValueFH", "CallValueMH", "CallValueRH", "PlayerPosAtTableFH", "PlayerPosAtTableMH",
+                         "PlayerPosAtTableRH"]].describe()
 
 # %%
 
@@ -200,6 +198,22 @@ game_variants.plot(kind="pie", y="Game", autopct='%1.0f%%')
 plt.savefig("graphics/all_games_pie_wm.png")
 plt.show()
 
+
+#%%
+
+skat_wm_game_data_frame["Surrendered"].value_counts(normalize=True)
+
+#%%
+skat_wm_cs_data_frame["SurrenderedAt"].value_counts(normalize=True)
+
+#%%
+print(len(skat_wm_game_data_frame))
+
+#%%
+print(len(skat_wm_cs_data_frame))
+
+#%%
+skat_wm_cs_and_game_data = skat_wm_game_data_frame.join(skat_wm_cs_data, lsuffix='_caller', rsuffix='_other')
 # %%
 
 # Filter the games that were won
@@ -270,115 +284,3 @@ games_clean.iloc[:, 3:] = games_clean.iloc[:, 3:].apply(pd.to_numeric, downcast=
 # games_clean.iloc[:, 6:38] = games_clean.iloc[:, 6:38].apply(pd.to_numeric, downcast="")
 
 games_clean.info(memory_usage="deep")
-# %%
-# convert data to following encoding:
-# ♦, ♥, ♠, ♣, {7, 8, 9, Q, K, 10, A, J}, T
-# with respect to their position
-def convert_cs(cards, trump):
-    converted_cs_cards = []
-
-    # for every card in the cs data frame, convert the card by it's input and store it in
-    # the order the cards were played
-    for i in range(30):
-        converted_cs_cards[3+cards.iloc[i]] = convert(i, trump=trump)
-
-    return converted_cs_cards
-
-
-# %%
-
-# ONLY FOR THE GAME DATA FRAME
-# convert cards to following encoding:
-# ♦, ♥, ♠, ♣, {7, 8, 9, Q, K, 10, A, J}, T
-def convert(card, trump):
-    vector_rep = {
-        0: [0, 0, 0, 1, 7, 0],  # A♣
-        1: [0, 0, 0, 1, 5, 0],  # K♣
-        2: [0, 0, 0, 1, 4, 0],  # Q♣
-        3: [0, 0, 0, 1, 8, 1],  # J♣
-        4: [0, 0, 0, 1, 6, 0],  # 10♣
-        5: [0, 0, 0, 1, 3, 0],  # 9♣
-        6: [0, 0, 0, 1, 2, 0],  # 8♣
-        7: [0, 0, 0, 1, 1, 0],  # 7♣
-        8: [0, 0, 0, 1, 7, 0],  # A♠
-        9: [0, 0, 0, 1, 5, 0],  # K♠
-        10: [0, 0, 1, 0, 4, 0],  # Q♠
-        11: [0, 0, 1, 0, 8, 1],  # J♠
-        12: [0, 0, 1, 0, 6, 0],  # 10♠
-        13: [0, 0, 1, 0, 3, 0],  # 9♠
-        14: [0, 0, 1, 0, 2, 0],  # 8♠
-        15: [0, 0, 1, 0, 1, 0],  # 7♠
-        16: [0, 1, 0, 0, 7, 0],  # A♥
-        17: [0, 1, 0, 0, 5, 0],  # K♥
-        18: [0, 1, 0, 0, 4, 0],  # Q♥
-        19: [0, 1, 0, 0, 8, 1],  # J♥
-        20: [0, 1, 0, 0, 6, 0],  # 10♥
-        21: [0, 1, 0, 0, 3, 0],  # 9♥
-        22: [0, 1, 0, 0, 2, 0],  # 8♥
-        23: [0, 1, 0, 0, 1, 0],  # 7♥
-        24: [1, 0, 0, 0, 7, 0],  # A♦
-        25: [1, 0, 0, 0, 5, 0],  # K♦
-        26: [1, 0, 0, 0, 4, 0],  # Q♦
-        27: [1, 0, 0, 0, 8, 1],  # J♦
-        28: [1, 0, 0, 0, 6, 0],  # 10♦
-        29: [1, 0, 0, 0, 3, 0],  # 9♦
-        30: [1, 0, 0, 0, 2, 0],  # 8♦
-        31: [1, 0, 0, 0, 1, 0]  # 7♦
-    }
-    converted_card = vector_rep[card]
-
-    # check if the card is trump in a colour game
-    if trump == 9:
-        if converted_card[0] == 1:
-            converted_card[-1] = 1
-    elif trump == 10:
-        if converted_card[1] == 1:
-            converted_card[-1] = 1
-    elif trump == 11:
-        if converted_card[2] == 1:
-            converted_card[-1] = 1
-    elif trump == 12:
-        if converted_card[3] == 1:
-            converted_card[-1] = 1
-
-    return converted_card
-
-
-trump = 0
-
-games_clean.loc[:, "Card1":"Card32"].head(n=10)
-
-# games_clean.loc[:, "Card1":"Card32"] = games_clean.loc[:, "Card1":"Card32"].apply(
-#     lambda card_list: card_list.apply(lambda card: convert(card, trump=trump)))
-
-
-cards = ["Card1", "Card2", "Card3", "Card4", "Card5", "Card6", "Card7", "Card8", "Card9", "Card10", "Card11", "Card12",
-         "Card13", "Card14", "Card15", "Card16", "Card17", "Card18", "Card19", "Card20", "Card21", "Card22",
-         "Card23", "Card24", "Card25", "Card26", "Card27", "Card28", "Card29", "Card30", "Card31", "Card32"]
-new_games_cards = pd.DataFrame(columns=cards)
-
-r = range(len(games_clean["Card1"]))
-r = range(100000)
-
-for j in cards:
-    print("Check\n")
-    for i in r:
-        # games_clean[j][i] = convert(games_clean[j][i], games_clean["Game"][i])
-        # games_clean.loc[i,j]
-        new_games_cards.loc[i, j] = convert(games_clean.loc[i, j], games_clean["Game"][i])
-
-
-# %%
-# new_games_cards["Card1"].info(memory_usage="deep")
-
-
-# %%
-# games_clean["Card1"][1]
-new_games_cards
-
-# create train and test sets
-# skat_train, skat_test = train_test_split(skat_data, test_size=0.2, random_state=0)
-
-# If data set is unsorted and randomly distributed
-# train_data = skat_data[:n*0.8]
-# test_data = skat_data[n*0.2:]

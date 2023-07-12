@@ -9,10 +9,7 @@
 # all log files
 *.log
 
-# python notebook checkpoints
-data_pipeline/.ipynb_checkpoints
-
-# all data directories
+# all data files
 /data/
 data/**/*.CSV
 
@@ -34,3 +31,4 @@ data/**/*.CSV
 .idea/**/dynamic.xml
 .idea/**/uiDesigner.xml
 .idea/**/dbnavigator.xml
+
