@@ -27,7 +27,7 @@ class Player:
 
     def has_suit(self, suit):
         for card in self.cards:
-            if card.suit is suit:
+            if card.face is not card.face.JACK and card.suit is suit:
                 return True
 
         return False

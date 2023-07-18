@@ -19,7 +19,7 @@ class Game:
         self.trick = Trick([self.get_first_seat(), self.get_second_seat(), self.get_third_seat()])
         self.trick.leader = self.get_first_seat()
 
-        self.create_deck()
+        # self.create_deck()
 
     def finish_trick(self):
         trick_winner, current_trick_points = self.trick.get_winner(self.game_variant)

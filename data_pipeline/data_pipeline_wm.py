@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import random
 from sklearn.model_selection import train_test_split
 
+import decision_transformer
+
 # %%
 
 """The dataset of the sequence the cards (cs) were played follows"""
@@ -120,6 +122,24 @@ print(skat_wm_game_data_frame.iloc[1, 0:2])
 print(skat_wm_game_data_frame.iloc[1, 9:41])
 
 print(skat_wm_game_data_frame.iloc[1, 59:60])
+
+# %%
+colums = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 55, 56, 58, 59]
+# list(range(9, 41))
+
+skat_data_game_frame = np.asarray(np.loadtxt(skat_wm_game_data_path, delimiter=",", dtype=int,
+                                             usecols=colums))
+
+# %%
+# skat_wm_game_data_frame = skat_wm_game_data_frame[skat_wm_game_data_frame["Won"] == 1]
+# %%
+skat_wm_game_data = skat_wm_game_data_frame.to_numpy()
+
+# %%
+skat_data_cs_frame = np.asarray(np.loadtxt(skat_wm_cs_data_path, delimiter=",", dtype=int))
+
+skat_and_cs = skat_data_cs_frame[:, 1:33]
+
 
 # %% Sanity Checks
 

@@ -7,7 +7,6 @@
       <excludeFolder url="file://$MODULE_DIR$/db_app/.venv/Lib/site-packages/numpy/random/tests/data" />
       <excludeFolder url="file://$MODULE_DIR$/db_app/.venv/Lib/site-packages/numpy/typing/tests/data" />
       <excludeFolder url="file://$MODULE_DIR$/db_app/.venv/Lib/site-packages/pandas/tests/io/data" />
-      <excludeFolder url="file://$MODULE_DIR$/db_app/data" />
       <excludeFolder url="file://$MODULE_DIR$/db_app/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/data_pipeline/.ipynb_checkpoints" />
     </content>

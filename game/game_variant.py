@@ -91,7 +91,7 @@ class GameVariantSuit(GameVariantGrand):
             return GameVariantGrand.compare_cards(self, card_higher, card_lower)
 
     def is_trump(self, card):
-        return card.suit is self.trump_suit or card.face is Card.Face.JACK
+        return card.suit.name is self.trump_suit or card.face is Card.Face.JACK
 
     def has_trump(self, player):
         return player.has_face(Card.Face.JACK) or player.has_suit(self.trump_suit)

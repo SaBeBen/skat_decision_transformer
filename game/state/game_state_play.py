@@ -20,7 +20,11 @@ class GameStatePlay(GameState):
 
     def play_card(self, player, card):
         self.check_valid_card_play(player, card)
+
+        # add the card to the trick
         self.game.trick.add(player, card)
+
+        # remove the card from the players hand
         player.cards.remove(card)
         # print("Player " + player.name + " played " + str(card))
 
@@ -30,7 +34,7 @@ class GameStatePlay(GameState):
     def check_valid_card_play(self, player, card):
         # check if player holding this card
         if not player.has_card(card):
-            raise InvalidPlayerMove("Player " + player.name + " doesn't holding the card " + str(card) + ".")
+            raise InvalidPlayerMove("Player " + player.name + " isn't holding the card " + str(card) + ".")
         # check if player already played a card to current trick
         if self.game.trick.has_already_played_card(player):
             raise InvalidPlayerMove("Player " + player.name + " already played a card to the trick.")
@@ -40,7 +44,7 @@ class GameStatePlay(GameState):
         # check if player can play this card (see follow)
         # TODO rule that player lost for playing wrong card?
         if not self.game.trick.is_valid_card_move(self.game.game_variant, player, card):
-            raise InvalidPlayerMove("Card " + str(card) + "is not a valid move by player " + player.name)
+            raise InvalidPlayerMove("Card " + str(card) + " is not a valid move by player " + player.name)
 
     def finish_trick(self):
         current_trick_points = self.game.finish_trick()
