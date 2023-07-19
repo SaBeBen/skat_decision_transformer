@@ -77,3 +77,9 @@ class Card:
 
     def __hash__(self):
         return hash((self.suit, self.face))
+
+    def __lt__(self, other):
+        if self.suit is other.suit:
+            return self.face.value < other.face.value
+        else:
+            return self.suit.value < other.suit.value

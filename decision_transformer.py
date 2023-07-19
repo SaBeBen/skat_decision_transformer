@@ -1,3 +1,5 @@
+from math import floor
+
 import numpy as np
 import torch
 import pandas as pd
@@ -6,7 +8,7 @@ from transformers import DecisionTransformerModel, DecisionTransformerConfig
 
 from game.game import Game
 from game.game_state_machine import GameStateMachine
-from game.game_variant import GameVariantSuit
+from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
 from game.state.game_state_bid import DeclareGameVariantAction, PutDownSkatAction, BidCallAction, BidPassAction, \
     PickUpSkatAction
 from game.state.game_state_start import GameStateStart, StartGameAction
@@ -229,37 +231,26 @@ class Env:
 # TODO: exchange for sql query
 # game_data = app.get_skat_data_wm()
 
-skat_wm_cs_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/db_app/data/wm_skattisch_kf.CSV"
 
-skat_wm_game_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/db_app/data/wm_skattisch_spiel.CSV"
-
-# skat_data_cs_frame = np.asarray(np.loadtxt(skat_wm_cs_data_path, delimiter=",", dtype=int))
-
-# skat_data_game_frame = np.asarray(np.loadtxt(skat_wm_game_data_path, delimiter=",", dtype=int))
-
-# Only use the relevant information: Skat and 30 played cards
-# skat_and_cs = skat_data_cs_frame[:, 1:33]
-
-# GameID (0), PlayerFH (6), PlayerMH (7), PlayerRH (8), Card1 (9):Card30 (40), PlayerID (44), Game (45),
-# special treatment: Won (55), Miscall (56), AllPassed (58), Surrendered (59)
-# only needs cards of current player
-# meta_and_cards = skat_data_game_frame[:, np.r_[0, 6, 7, 8, 9:40, 44, 45, 55, 56, 58, 59]]
-
-# position of the team player with respect to own pos; if 0 -> soloist
-# alternating players perspective = {FH/MH/RH}
-# -> pos_tp
-# -> hand_cards
-
-# select available cudas for faster matrix computation
-# device = torch.device("cuda")
-
-# env = Env(device)
-
-skat_wm_cs_data_frame = pd.read_csv(skat_wm_cs_data_path, header=None)
+def get_trump(trump, enc="cat"):
+    if enc == "cat":
+        # if categorical encoding of suits is activated
+        return [1 if trump == 12 or trump == 24 else 0, 1 if trump == 11 or trump == 24 else 0,
+                1 if trump == 10 or trump == 24 else 0, 1 if trump == 9 or trump == 24 else 0]
+    elif 8 < trump < 13:
+        return trump - 9
+    else:
+        return trump
 
 
-def get_data():
-    skat_wm_cs_data = skat_wm_cs_data_frame
+def get_wm_game():
+
+
+    skat_wm_cs_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/db_app/data/wm_skattisch_kf.CSV"
+
+    skat_wm_game_data_path = "C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/db_app/data/wm_skattisch_spiel.CSV"
+
+    skat_wm_cs_data = pd.read_csv(skat_wm_cs_data_path, header=None)
 
     skat_wm_cs_data.columns = ["GameID", "Sd1", "Sd2", "CNr0", "CNr1", "CNr2", "CNr3", "CNr4", "CNr5", "CNr6", "CNr7",
                                "CNr8", "CNr9", "CNr10", "CNr11", "CNr12", "CNr13", "CNr14", "CNr15", "CNr16", "CNr17",
@@ -273,15 +264,11 @@ def get_data():
 
     skat_and_cs[:, 3:35] = np.argsort(skat_and_cs[:, 3:35], axis=1)
 
-    # skat_and_cs = skat_and_cs[:, 1:33]
-
     # GameID (0), PlayerFH (6), PlayerMH (7), PlayerRH (8), Card1 (9):Card30 (38), Card31 (39): Card32 (40) = Skat,
     # PlayerID (44), Game (45),
-    # special treatment: Won (55), Miscall (56), AllPassed (58), Surrendered (59)
+    # special treatment: Hand(48), PointsPlayer (54), Won (55), Miscall (56), AllPassed (58), Surrendered (59)
     # only needs cards of current player
-    colums = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 55, 56, 58, 59]
-
-    # meta_and_cards = np.asarray(np.loadtxt(skat_wm_game_data_path, delimiter=",", dtype=int, usecols=colums))
+    colums = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 48, 54, 55, 56, 58, 59]
 
     skat_wm_game_data_frame = pd.read_csv(skat_wm_game_data_path, header=None)
 
@@ -299,15 +286,18 @@ def get_data():
 
     skat_wm_game_data_frame = skat_wm_game_data_frame.iloc[:, colums]
 
-    # TODO: only look at won games
-    # only consider games where nobody surrendered, if someone surrendered, the rest of the cards are "taken"
-    # in their order
+    # if someone surrendered, the rest of the cards are in the cs data in their order
+
     # exclude games where all players passed
     skat_wm_game_data_frame = skat_wm_game_data_frame[(skat_wm_game_data_frame["AllPassed"] == 0)]
     # & (skat_wm_game_data_frame["Won"] == 1)
     # & (skat_wm_game_data_frame["Surrendered"] == 0)
 
-    meta_and_cards = skat_wm_game_data_frame.to_numpy()  # skat_wm_game_data_frame
+    return skat_wm_game_data_frame.to_numpy(), skat_and_cs
+
+
+def get_data():
+    meta_and_cards, skat_and_cs = get_wm_game()
 
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
@@ -315,199 +305,313 @@ def get_data():
     # -> hand_cards
     amount_games = 10
 
-    game_state_table = [[]]
+    game_state_table = [[] * state_dim * 10] * amount_games * 3
 
-    actions_table = [[]]
+    actions_table = [[] * act_dim * 10] * amount_games * 3
 
-    rewards_table = [[]]
+    rewards_table = [[] * 10] * amount_games * 3
 
     # select available cudas for faster matrix computation
     # device = torch.device("cuda")
 
-    for game in meta_and_cards[:amount_games]:
-        env = Env()
+    for game in meta_and_cards[:amount_games, :]:
+        print(f"Processing Game {game[0]} ")
 
-        # skip the bid process
-        # env.state_machine.handle_action()
+        for i in range(3):
+            # print(f"Player {i} is currently transferred")
+            env = Env()
 
-        print(game)
-        game_state = []
+            # rotate players to get every perspective of play
+            players = [env.player1, env.player2, env.player3]
 
-        actions = []
+            current_player = players[i]
 
-        rewards = []
+            current_player2 = players[(i + 1) % 3]
 
-        # conversion1 = [convert_one_hot_to_card(card) for card in meta_and_cards[game, 4:14].to_list()]
+            current_player3 = players[(i + 2) % 3]
 
-        # skip start of the game (shuffling and dealing)
-        env.state_machine.state_finished_handler()
-        # instead initialise the hand cards
-        env.player1.set_cards([convert_one_hot_to_card(card) for card in game[4:14].tolist()])
-        env.player2.set_cards([convert_one_hot_to_card(card) for card in game[14:24].tolist()])
-        env.player3.set_cards([convert_one_hot_to_card(card) for card in game[24:34].tolist()])
+            states, actions, rewards = [], [], []
 
-        # initialize the Skat
-        skat_up = [game[34], game[35]]
-        # env.state_machine.handle_action(PutDownSkatAction(env.player1, [convert_one_hot_to_card(skat[0]),
-        #                                                                 convert_one_hot_to_card(skat[1])]))
-        env.game.skat.extend([convert_one_hot_to_card(skat_up[0]), convert_one_hot_to_card(skat_up[1])])
+            # player_id: ID of current solo player
+            # trump: game the soloist plays
+            # hand: binary encoding whether hand was played
+            # soloist_points: points the soloist receives for playing a certain game
+            player_id, trump, hand, soloist_points = game[-8], game[-7], game[-6], game[-5]
 
-        # ID of current solo player
-        player_ID = game[-6]
+            # we fixate the player on an index in the data set and rotate over the index
+            agent_player = game[i + 1]
 
-        # trump is defined by the game the soloist plays
-        trump = game[-5]
+            # initialize the Skat
+            skat_up = [game[34], game[35]]
 
-        # we fixate the player on an index in the data set and
-        # TODO: rotate
-        agent_player = game[1]
+            # categorical encoding of trump suit color
+            # if a grand is played --> [1, 1, 1, 1]
+            # if a null game is played --> [0, 0, 0, 0]     # TODO: implement null ouvert
+            trump_enc = get_trump(trump)
 
-        # convert DB encoding to env encoding
-        suit = Card.Suit(trump - 9).name
+            # if a game was surrendered, the amount of tricks played before surrender is stored in surrendered trick
+            surrendered_trick = floor(skat_and_cs[game[0] - 1, -1] / 3)
 
-        # env.state_machine.handle_action(DeclareGameVariantAction(env.player1, GameVariantSuit(suit)))
-        # env.game.game_variant = GameVariantSuit(suit)
-        # skip the bid process
-        # env.state_machine.state_finished_handler()
+            # skip start of the game (shuffling and dealing)
+            env.state_machine.state_finished_handler()
 
-        # TODO: 12 cards
-        if agent_player == player_ID:
-            soloist = env.player1
-            env.player1.type = Player.Type.DECLARER
-            env.player2.type = Player.Type.DEFENDER
-            env.player3.type = Player.Type.DEFENDER
-            env.state_machine.handle_action(BidCallAction(env.player1, 18))
-            env.state_machine.handle_action(BidPassAction(env.player2, 18))
-            env.state_machine.handle_action(BidPassAction(env.player3, 18))
-            pos_tp = 0
-        else:
-            env.player1.type = Player.Type.DEFENDER
-            if player_ID == game[2]:
-                soloist = env.player2
-                pos_tp = 2
-                env.player2.type = Player.Type.DECLARER
-                env.player3.type = Player.Type.DEFENDER
-                env.state_machine.handle_action(BidCallAction(env.player2, 18))
-                env.state_machine.handle_action(BidPassAction(env.player1, 18))
-                env.state_machine.handle_action(BidPassAction(env.player3, 18))
+            # ...instead, initialise the hand cards
+            current_player.set_cards(
+                [convert_one_hot_to_card(card) for card in
+                 game[4 + 10 * i:14 + 10 * i].tolist()])
+            current_player2.set_cards(
+                [convert_one_hot_to_card(card) for card in
+                 game[4 + ((10 + 10 * i) % 30):4 + ((20 + 10 * i - 1) % 30 + 1)].tolist()])
+            current_player3.set_cards(
+                [convert_one_hot_to_card(card) for card in
+                 game[4 + ((20 + 10 * i) % 30):4 + ((30 + 10 * i - 1) % 30 + 1)].tolist()])
+
+            # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
+            current_player.cards.sort()
+            current_player2.cards.sort()
+            current_player3.cards.sort()
+            # TODO: access the player card with fast search, for instance binary search
+
+            # initialise Skat in the environment
+            env.game.skat.extend([convert_one_hot_to_card(skat_up[0]), convert_one_hot_to_card(skat_up[1])])
+
+            # initialise roles, encode positions and simulate bidding
+            if agent_player == player_id:
+
+                # encode the position of the team partner
+                pos_tp = 0
+                # used to encode position of agent for game identification
+                agent_player = i
+                soloist = current_player
+
+                current_player.type = Player.Type.DECLARER
+                current_player2.type = Player.Type.DEFENDER
+                current_player3.type = Player.Type.DEFENDER
+                env.state_machine.handle_action(BidCallAction(current_player, 18))
+                env.state_machine.handle_action(BidPassAction(current_player2, 18))
+                env.state_machine.handle_action(BidPassAction(current_player3, 18))
             else:
-                soloist = env.player3
-                pos_tp = 1
-                env.player3.type = Player.Type.DECLARER
-                env.player2.type = Player.Type.DEFENDER
-                env.state_machine.handle_action(BidCallAction(env.player3, 18))
-                env.state_machine.handle_action(BidPassAction(env.player1, 18))
-                env.state_machine.handle_action(BidPassAction(env.player2, 18))
+                current_player.type = Player.Type.DEFENDER
+                if player_id == game[1 + (i + 1) % 3]:
+                    pos_tp = 2
+                    agent_player = (i + 1) % 3
+                    soloist = current_player2
 
-        # pick up the Skat
-        env.state_machine.handle_action(PickUpSkatAction(soloist))
+                    current_player2.type = Player.Type.DECLARER
+                    current_player3.type = Player.Type.DEFENDER
+                    env.state_machine.handle_action(BidCallAction(current_player2, 18))
+                    env.state_machine.handle_action(BidPassAction(current_player, 18))
+                    env.state_machine.handle_action(BidPassAction(current_player3, 18))
+                else:
+                    pos_tp = 1
+                    agent_player = (i + 2) % 3
+                    soloist = current_player3
 
-        skat_down = [convert_one_hot_to_card(skat_and_cs[game[0] - 1, 1]),
-                     convert_one_hot_to_card(skat_and_cs[game[0] - 1, 2])]
+                    current_player3.type = Player.Type.DECLARER
+                    current_player2.type = Player.Type.DEFENDER
+                    env.state_machine.handle_action(BidCallAction(current_player3, 18))
+                    env.state_machine.handle_action(BidPassAction(current_player, 18))
+                    env.state_machine.handle_action(BidPassAction(current_player2, 18))
 
-        # put Skat down
-        env.state_machine.handle_action(PutDownSkatAction(soloist, skat_down))
+            # there is no card revealed during Skat putting
+            open_cards = [-1, -1]
 
-        # TODO: 12 cards
-        if env.player1.type == Player.Type.DECLARER:
-            # if agent is player, select Skat
-            actions.extend([skat_and_cs[game[0] - 1, 1], skat_and_cs[game[0] - 1, 2]])
-            rewards.extend([skat_down[0].get_value(), skat_down[1].get_value()])
-            skat_down.append(-1)
-            last_trick = [skat_and_cs[game[0] - 1, 1], skat_and_cs[game[0] - 1, 2]]  # Skat and padding in the beginning
-        else:
-            actions.extend([-1, -1])
-            rewards.extend([0, 0])
+            # during Skat selection, there is no last trick,
+            # it will only be the last trick for the soloist when putting the Skat down
             last_trick = [-1, -1, -1]
 
-        # announce game variant
-        env.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(suit)))
+            if not hand:
+                # pick up the Skat
+                env.state_machine.handle_action(PickUpSkatAction(soloist))
 
-        open_cards = [-1, -1]  # there is no card revealed during Skat putting
+                # update hand cards: they will contain the Skat
+                hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
 
-        hand_cards = [convert_card_to_one_hot(card) for card in env.player1.cards]
+                # put down Skat...
+                skat_down = [convert_one_hot_to_card(skat_and_cs[game[0] - 1, 1]),
+                             convert_one_hot_to_card(skat_and_cs[game[0] - 1, 2])]
 
-        game_state = np.concatenate([pos_tp, trump, last_trick, open_cards, hand_cards], dtype=np.int8, axis=None)
+                # ...in the game state
+                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards], dtype=np.int8,
+                                            axis=None)
 
-        for trick in range(1, 11):
-            print(f"current trick {trick}")
+                # ...in the environment
+                env.state_machine.handle_action(PutDownSkatAction(soloist, skat_down))
+            else:
+                # update hand cards: they will not contain the Skat
+                hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
 
-            # if the player sits in the front this trick
-            if env.game.trick.leader == env.player1:
-                # in position of first player, there are no open cards
-                open_cards = [-1, -1]
+                # pad the current cards to a length of 12
+                hand_cards.extend([0,0])
 
-                # convert each card to the desired encoding
-                hand_cards = [convert_card_to_one_hot(card) for card in env.player1.cards]
+                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards], dtype=np.int8,
+                                            axis=None)
 
-                # pad the cards to a length of 12
-                hand_cards = np.pad(hand_cards, (trick, 0))
+            # ...put down Skat in the data (s, a, r)
+            # each Skat card needs its own action (due to act_dim)
+            if current_player.type == Player.Type.DECLARER and not hand:
 
-                game_state = np.concatenate([game_state, pos_tp, trump, last_trick, open_cards, hand_cards],
-                                            dtype=np.int8, axis=None)
+                # the last trick is the put Skat and padding in the beginning
+                last_trick = [skat_and_cs[game[0] - 1, 1], -1, -1]
 
-                actions.append(skat_and_cs[game[0] - 1, 3 * trick])
+                game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+                                            dtype=np.int8,
+                                            axis=None)
 
-            env.state_machine.handle_action(
-                PlayCardAction(player=env.game.trick.leader,
-                               card=convert_one_hot_to_card(skat_and_cs[game[0] - 1, 3 * trick])))
+                # the last trick is the put Skat and padding in the beginning
+                last_trick = [skat_and_cs[game[0] - 1, 1], skat_and_cs[game[0] - 1, 2], -1]
 
-            # if the player sits in the middle this trick
-            if env.game.trick.get_current_player() == env.player1:
-                # in position of the second player, there is one open card
-                open_cards = [skat_and_cs[game[0] - 1, 3 * trick], -1]
+                # it is not necessary to simulate sequential putting with actions and rewards
+                # instantly get rewards of the put Skat
+                rewards.extend([skat_down[0].get_value(), skat_down[1].get_value()])
 
-                # convert each card to the desired encoding
-                hand_cards = [convert_card_to_one_hot(card) for card in env.player1.cards]
+                # if agent is player, select Skat by putting down two cards
+                actions.extend([skat_and_cs[game[0] - 1, 1], skat_and_cs[game[0] - 1, 2]])
+            else:
+                # the process of Skat selection is not visible for defenders,
+                # thus it is padded and the defenders cards do not change
+                actions.extend([0, 0])
+                rewards.extend([0, 0])
+                last_trick = [0, 0, 0]
 
-                # pad the cards to a length of 12
-                hand_cards = np.pad(hand_cards, (trick, 0))
+                hand_cards.extend([0, 0])
 
-                game_state = np.concatenate([game_state, pos_tp, trump, last_trick, open_cards, hand_cards],
-                                            dtype=np.int8, axis=None)
+                game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+                                            dtype=np.int8,
+                                            axis=None)
 
-                actions.append(skat_and_cs[game[0] - 1, 3 * trick + 1])
+            # TODO: uniform padding with 0 -> cards from 1-32
 
-            env.state_machine.handle_action(
-                PlayCardAction(player=env.game.trick.get_current_player(),
-                               card=convert_one_hot_to_card(skat_and_cs[game[0] - 1, 3 * trick + 1])))
+            hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+            hand_cards.extend([0, 0])
 
-            # if the player sits in the rear this trick
-            if env.game.trick.get_current_player() == env.player1:
-                # in position of the third player, there are two open cards
-                open_cards = [skat_and_cs[game[0] - 1, 3 * trick],
-                              skat_and_cs[game[0] - 1, 3 * trick + 1]]
+            # add starting state
+            game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards], dtype=np.int8,
+                                        axis=None)
 
-                # convert each card to the desired encoding
-                hand_cards = [convert_card_to_one_hot(card) for card in env.player1.cards]
+            # declare the game variant, TODO: implement null rewards
+            if trump == 0 or trump == 35 or trump == 46 or trump == 59:
+                # null
+                env.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantNull()))
+            elif trump == 24:
+                # grand
+                env.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantGrand()))
+            else:
+                # convert DB encoding to env encoding
+                suit = Card.Suit(trump - 9).name
+                # announce game variant
+                env.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(suit)))
 
-                # pad the cards to a length of 12
-                hand_cards = np.pad(hand_cards, (trick, 0))
+            for trick in range(1, 11):
 
-                game_state = np.concatenate([game_state, pos_tp, trump, last_trick, open_cards, hand_cards],
-                                            dtype=np.int8, axis=None)
+                # if the player sits in the front this trick
+                if env.game.trick.leader == current_player:
+                    # in position of first player, there are no open cards
+                    open_cards = [-1, -1]
 
-                actions.append(skat_and_cs[game[0] - 1, 3 * trick + 2])
+                    # convert each card to the desired encoding
+                    hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
 
-            env.state_machine.handle_action(
-                PlayCardAction(player=env.game.trick.get_current_player(),
-                               card=convert_one_hot_to_card(skat_and_cs[game[0] - 1, 3 * trick + 2])))
+                    # pad the cards to a length of 12
+                    hand_cards = np.pad(hand_cards, (trick + 2, 0))
 
-            rewards.append(env.player1.current_trick_points)
+                    game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+                                                dtype=np.int8, axis=None)
 
-            last_trick = [skat_and_cs[game[0] - 1, 3 * trick]] + [skat_and_cs[game[0] - 1, 3 * trick + 1]] + [
-                skat_and_cs[game[0] - 1, 3 * trick + 2]]
+                    actions.append(skat_and_cs[game[0] - 1, 3 * trick])
 
-        # in the end of each game, insert the states, actions and rewards
-        # insert states
-        # game_state_table[game] = [game[0] - 1] + [agent_player] + game_state
-        game_state_table[game] = np.concatenate(([game[0] - 1, agent_player, game_state]), axis=None)
-        # insert actions
-        # actions_table[game] = [game[0] - 1] + [agent_player] + actions
-        game_state_table[game] = np.concatenate([game[0] - 1, agent_player, actions], axis=None)
-        # insert rewards
-        # rewards_table[game] = [game[0] - 1] + [agent_player] + rewards
-        game_state_table[game] = np.concatenate([[game[0] - 1], agent_player, rewards], axis=None)
+                env.state_machine.handle_action(
+                    PlayCardAction(player=env.game.trick.leader,
+                                   card=convert_one_hot_to_card(skat_and_cs[game[0] - 1, 3 * trick])))
+
+                # if the player sits in the middle this trick
+                if env.game.trick.get_current_player() == current_player:
+                    # in position of the second player, there is one open card
+                    open_cards = [skat_and_cs[game[0] - 1, 3 * trick], -1]
+
+                    # convert each card to the desired encoding
+                    hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+
+                    # pad the cards to a length of 12
+                    hand_cards = np.pad(hand_cards, (trick + 2, 0))
+
+                    game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+                                                dtype=np.int8, axis=None)
+
+                    actions.append(skat_and_cs[game[0] - 1, 3 * trick + 1])
+
+                env.state_machine.handle_action(
+                    PlayCardAction(player=env.game.trick.get_current_player(),
+                                   card=convert_one_hot_to_card(skat_and_cs[game[0] - 1, 3 * trick + 1])))
+
+                # if the player sits in the rear this trick
+                if env.game.trick.get_current_player() == current_player:
+                    # in position of the third player, there are two open cards
+                    open_cards = [skat_and_cs[game[0] - 1, 3 * trick],
+                                  skat_and_cs[game[0] - 1, 3 * trick + 1]]
+
+                    # convert each card to the desired encoding
+                    hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+
+                    # pad the cards to a length of 12
+                    hand_cards = np.pad(hand_cards, (trick + 2, 0))
+
+                    game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+                                                dtype=np.int8, axis=None)
+
+                    actions.append(skat_and_cs[game[0] - 1, 3 * trick + 2])
+
+                env.state_machine.handle_action(
+                    PlayCardAction(player=env.game.trick.get_current_player(),
+                                   card=convert_one_hot_to_card(skat_and_cs[game[0] - 1, 3 * trick + 2])))
+
+                last_trick = [skat_and_cs[game[0] - 1, 3 * trick]] + [skat_and_cs[game[0] - 1, 3 * trick + 1]] + [
+                    skat_and_cs[game[0] - 1, 3 * trick + 2]]
+
+                # check if game was surrendered at this trick
+                if surrendered_trick == trick:
+                    # if game was surrendered by defenders out of the perspective of soloist or
+                    # if game was surrendered by soloist out of the perspective of a defender
+                    if (game[-4] and current_player is env.game.get_declarer()) or \
+                            (not game[-4] and current_player.type is Player.Type.DEFENDER):
+                        # add reward and player points as last reward
+                        rewards.append(current_player.current_trick_points + soloist_points)
+                        actions.append(0)
+                    else:
+                        # action of surrendering
+                        actions.append(-2)
+                        # default behaviour (gives a negative reward here)
+                        rewards.append(current_player.current_trick_points)
+
+                    # pad the states with 0s
+                    game_state = np.pad(game_state, (0, trick * state_dim))
+
+                    actions = np.pad(actions, (0, trick - 1))
+
+                    # pad the rewards with 0s
+                    rewards = np.pad(rewards, (0, trick))
+                    break
+                else:
+                    rewards.append(current_player.current_trick_points)
+
+            if hand:
+                # if hand is played, add the Skat points in the end of the game to simulate not knowing it
+                rewards[-1] += convert_one_hot_to_card(skat_up[0]).get_value() \
+                               + convert_one_hot_to_card(skat_up[1]).get_value()
+
+            # add the points to the soloist
+            rewards[-1] += soloist_points
+
+            # in the end of each game, insert the states, actions and rewards
+            # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
+            # insert states
+            game_state_table[3 * (game[0] - 1) + i] = np.concatenate([game[0] - 1, agent_player, game_state], axis=None)
+            # insert actions
+            actions_table[3 * (game[0] - 1) + i] = np.concatenate([game[0] - 1, agent_player, actions], axis=None)
+            # insert rewards
+            rewards_table[3 * (game[0] - 1) + i] = np.concatenate([[game[0] - 1], agent_player, rewards], axis=None)
+
+            print(f"Read in {3 * (game[0] - 1) + i + 1} games.")
 
     return game_state_table, actions_table, rewards_table
 
