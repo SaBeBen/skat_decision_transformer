@@ -5,11 +5,11 @@ world championship (wc),
 
 German league “Bundesliga” (bl), 
 
-German championship (in German “deutsche Meisterschaft” dm), 
+German championship (gc) (in German “deutsche Meisterschaft” dm), 
 
-a DOSKV championship where only members can participate (rl) 
+a DOSKV championship where only members can participate, more regional (rc) (rl) 
 
-and a German tandem championship (dt). 
+and a German tandem championship (gtc). 
 
 All of them use the same set of rules. 
 As the bl is played in teams, single players play more defensively. 

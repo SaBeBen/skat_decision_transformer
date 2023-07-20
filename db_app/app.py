@@ -11,8 +11,8 @@ from model.player import Player
 
 app = Flask(__name__)
 
-skat_wm_cs_data_path = "data/wm_skattisch_kf.CSV"
-skat_wm_game_data_path = "data/wm_skattisch_spiel.CSV"
+skat_wm_cs_data_path = "data/wc_card_sequence.CSV"
+skat_wm_game_data_path = "data/wc_game.CSV"
 
 logger = logging.getLogger("mysql.connector")
 logger.setLevel(logging.WARNING)
