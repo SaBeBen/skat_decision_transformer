@@ -364,9 +364,6 @@ def get_game(game="wc"):
 
 
 def surrender(game, current_player, env, soloist_points, trick, game_state, actions, rewards):
-    # TODO: change padding according to the moves already made, find out why surrendered games differ and why length of
-    # games are not 13 * 22 = 286
-    
     # if game was surrendered by defenders out of the perspective of soloist or
     # if game was surrendered by soloist out of the perspective of a defender
     if (game[-4] and current_player is env.game.get_declarer()) or \
@@ -426,7 +423,7 @@ def get_states_actions_rewards():
 
             current_player3 = players[(i + 2) % 3]
 
-            states, actions, rewards = [], [], []
+            states, actions, rewards, rtg, timesteps, mask = [], [], [], [], [], []
 
             # player_id: ID of current solo player
             # trump: game the soloist plays
@@ -708,7 +705,18 @@ def get_states_actions_rewards():
 
         cs_index = cs_index + 1
 
-    return game_state_table, actions_table, rewards_table
+    # return game_state_table, actions_table, rewards_table
+
+    return {
+        "states": game_state_table,
+        "actions": actions_table,
+        "rewards": rewards_table,
+        # "returns_to_go": rtg,
+        # "timesteps": timesteps,
+        # "attention_mask": mask,
+    }
+
+# TODO: returns-to-go, timesteps, attention mask
 
 
 # the dataset is already tokenized in the database
