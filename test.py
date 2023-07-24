@@ -1,28 +1,38 @@
 import random
 from dataclasses import dataclass
-from math import floor
 
 import numpy as np
 import torch
+from tqdm import tqdm
 from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig, \
     DefaultDataCollator
-
+# %%
 import decision_transformer
 
-# data = decision_transformer.get_states_actions_rewards()
+# %%
+dataset = decision_transformer.get_states_actions_rewards(amount_games=10)
 
-from datasets import load_dataset
+# %%
+from datasets import Dataset
 
-dataset = load_dataset("edbeeching/decision_transformer_gym_replay", "halfcheetah-expert-v2")
+dataset = Dataset.from_dict(dataset)
+# %%
+from transformers import DataCollatorWithPadding
+
+
+# from datasets import load_dataset
+
+# dataset = load_dataset("edbeeching/decision_transformer_gym_replay", "halfcheetah-expert-v2")
 
 
 # TODO: tqdm for progress bar
 
-def get_batch_ind(game_length):
+def get_batch_ind():  # game_length
     # picks game indices
     # this picks the same game over *times* times
+    # (WC GameID 4)
     times = 100
-    return np.tile(np.arange(game_length), times)
+    return np.tile(np.arange(4, 5), times)
 
     # return np.random.choice(
     #     np.arange(n_traj),
@@ -36,7 +46,8 @@ def get_batch_ind(game_length):
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"
-    max_len: int = 13  # 13 subsets of the episode we use for training, our episode length is short-> computationally cheap
+    max_len: int = 13  # 13 subsets of the episode we use for training, our episode length is short
+    # -> computationally cheap
     state_dim: int = 22  # 22 size of state space
     act_dim: int = 1  # 1 size of action space
     max_ep_len: int = 13  # 13 max episode length in the dataset
@@ -47,14 +58,13 @@ class DecisionTransformerSkatDataCollator:
     n_traj: int = 0  # to store the number of trajectories in the dataset TODO: do we need this?
 
     def __init__(self, dataset) -> None:
-        # TODO: dataset
-        self.act_dim = len(dataset["train"]["actions"][0])
-        self.state_dim = len(dataset["train"]["observations"][0])
+        self.act_dim = len(dataset["actions"][0])
+        self.state_dim = len(dataset["states"][0])
         self.dataset = dataset
         # calculate dataset stats for normalization of states
         states = []
         traj_lens = []
-        for obs in dataset["train"]["observations"]:
+        for obs in dataset["states"]:
             states.extend(obs)
             traj_lens.append(len(obs))
         self.n_traj = len(traj_lens)
@@ -73,47 +83,49 @@ class DecisionTransformerSkatDataCollator:
 
     def __call__(self, features):
         batch_size = len(features)
-        # this is a bit of a hack to be able to sample of a non-uniform distribution
-        # TODO: Unfitting for our implementation, try to use other method
-        # we have a random pick of the data as a batch without controlling the shape,
-        # TODO: We want one game as a whole in a batch
-        # TODO: normalization
-        # TODO: rtg, timesteps and mask
+
+        # TODO: We want one game as a whole in a batch v
+        # TODO: normalization v
+        # TODO: rtg, timesteps and mask v
         # TODO: scale rewards
+        # TODO: find a suit game which is easily won v
 
-        # We dont need "train" and test within the dataset
+        # We don't need "train" and test within the dataset
 
-        batch_inds = get_batch_ind(self.state_dim*self.max_ep_len)
+        batch_inds = get_batch_ind()  # self.state_dim * self.max_ep_len
 
+        # this is a bit of a hack to be able to sample of a non-uniform distribution
+        # we have a random pick of the data as a batch without controlling the shape,
         #     np.random.choice(
         #     np.arange(self.n_traj),
         #     size=batch_size,
         #     replace=True,
         #     p=self.p_sample,  # reweights so we sample according to timesteps
         # )
+
         # a batch of dataset features
         s, a, r, rtg, timesteps, mask = [], [], [], [], [], []
 
         for ind in batch_inds:
             # for feature in features:
-            feature = self.dataset["train"][int(ind)]
+            feature = self.dataset[int(ind)]
 
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
-            si = random.randint(0, len(feature["rewards"]) - 1)
+            si = random.randint(0, len(feature["rewards"]) - 1)  # feature[]
 
             # get sequences from dataset
-            s.append(np.array(feature["observations"]
-                              [si * self.state_dim: si + self.max_len * self.state_dim]).reshape(1, -1))
-            a.append(np.array(feature["actions"][si: si + self.max_len]).reshape(1, -1))
-            r.append(np.array(feature["rewards"][si: si + self.max_len]).reshape(1, -1))
+            s.append(np.array(feature["states"]  # feature[]
+                              [si * self.state_dim: si + self.max_len * self.state_dim]).reshape(1, -1, self.state_dim))
+            a.append(np.array(feature["actions"][si: si + self.max_len]).reshape(1, -1, self.act_dim))  # feature[]
+            r.append(np.array(feature["rewards"][si: si + self.max_len]).reshape(1, -1, 1))  # feature[]
 
             # d.append(np.array(feature["dones"][si: si + self.max_len]).reshape(1, -1))
 
-            timesteps.append(np.arange(si, si + ).reshape(1, -1))  # s[-1].shape[1]
+            timesteps.append(np.arange(si, si + s[-1].shape[1]).reshape(1, -1))  # s[-1].shape[1]
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
-                self._discount_cumsum(np.array(feature["rewards"][si:]), gamma=1.0)[
+                self._discount_cumsum(np.array(dataset["rewards"][si:]), gamma=1.0)[
                 : s[-1].shape[1]  # TODO check the +1 removed here
                 ].reshape(1, -1, 1)
             )
@@ -122,21 +134,21 @@ class DecisionTransformerSkatDataCollator:
                 rtg[-1] = np.concatenate([rtg[-1], np.zeros((1, 1, 1))], axis=1)
 
             # padding and state + reward normalization
-            tlen = s[-1].shape[1]
+            tlen = ind % 13  # s[-1].shape[1]
 
-            smone = s[-1]
-            # DONE: states, actions, rewards are already padded
-            # TODO: normalization
-            # s[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, self.state_dim)), smone], axis=1)
+            # states, actions, rewards are already padded
+
+            padding = np.zeros((1, self.max_len - tlen, self.state_dim))
+            s[-1] = np.concatenate([padding, s[-1]], axis=1)
 
             # state normalization
             s[-1] = (s[-1] - self.state_mean) / self.state_std
 
-            # a[-1] = np.concatenate(
-            #     [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
-            #     axis=1,
-            # )
-            # r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
+            a[-1] = np.concatenate(
+                [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
+                axis=1,
+            )
+            r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
             # d[-1] = np.concatenate([np.ones((1, self.max_len - tlen)) * 2, d[-1]], axis=1)
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1) / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
@@ -194,20 +206,29 @@ training_args = TrainingArguments(
     max_grad_norm=0.25,
 )
 
-collator = DefaultDataCollator()  # DecisionTransformerSkatDataCollator(dataset)
+collator = DecisionTransformerSkatDataCollator(dataset)
+# collator = DefaultDataCollator()
+
+# with DefaultDataCollator() or no Collator: ValueError: expected sequence of length 14 at dim 1 (got 13)
+#
+# fix from stackoverflow not working
+# def tokenize_function(examples):
+#     return tokenizer(examples['text'], padding='max_length', truncation=True, max_length=286)
 
 configuration = DecisionTransformerConfig(state_dim=22,  # each state consist out of 22 numbers
                                           act_dim=1,  # each action consists out of one played card ()
-                                          max_ep_len=13,  # each episode is a game -> 13 tuples of s,a,r make up 1 game
+                                          max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
                                           vocab_size=32  # there are 32 cards, TODO: other encodings (like pos_tp)?
                                           )
+
 model = DecisionTransformerModel(configuration)
 
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=dataset["train"],
-    # data_collator=collator,
+    train_dataset=dataset,
+    eval_dataset=dataset,
+    data_collator=collator,
 )
 
 trainer.train()

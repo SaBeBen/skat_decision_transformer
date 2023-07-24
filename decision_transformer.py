@@ -363,11 +363,10 @@ def get_game(game="wc"):
     return skat_game_data.to_numpy(), skat_and_cs
 
 
-def surrender(game, current_player, env, soloist_points, trick, game_state, actions, rewards):
+def surrender(won, current_player, soloist_points, trick, game_state, actions, rewards):
     # if game was surrendered by defenders out of the perspective of soloist or
     # if game was surrendered by soloist out of the perspective of a defender
-    if (game[-4] and current_player is env.game.get_declarer()) or \
-            (not game[-4] and current_player.type is Player.Type.DEFENDER):
+    if won:
         # add reward and player points as last reward
         rewards.append(current_player.current_trick_points + soloist_points)
         actions.append(0)
@@ -383,19 +382,18 @@ def surrender(game, current_player, env, soloist_points, trick, game_state, acti
     actions = np.pad(actions, (0, 11 - trick - 2))
 
     # pad the rewards with 0s
-    rewards = np.pad(rewards, (0, 11 - trick - 2))
+    rewards = np.pad(rewards, (0, 11 - trick - 1))
 
     return game_state, actions, rewards
 
 
-def get_states_actions_rewards():
-    meta_and_cards, skat_and_cs = get_game(game="wc")
+def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewards=False):
+    meta_and_cards, skat_and_cs = get_game(game=championship)
 
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
     # -> pos_tp
     # -> hand_cards
-    amount_games = 10000
 
     game_state_table = [[] * state_dim * 10] * amount_games * 3
 
@@ -430,6 +428,9 @@ def get_states_actions_rewards():
             # hand: binary encoding whether hand was played
             # soloist_points: points the soloist receives for playing a certain game
             player_id, trump, hand, soloist_points = game[-8], game[-7], game[-6], game[-5]
+
+            won = ((current_player is Player.Type.DECLARER) and game[-4]) or\
+                  ((current_player is Player.Type.DEFENDER) and not game[-4])
 
             # we fixate the player on an index in the data set and rotate over the index
             agent_player = game[i + 1]
@@ -529,7 +530,8 @@ def get_states_actions_rewards():
                     hand_cards.extend([0, 0])
 
                 # ...in the game state
-                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards], dtype=np.int8,
+                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+                                            # dtype=np.int8,
                                             axis=None)
 
                 # ...in the environment
@@ -541,7 +543,8 @@ def get_states_actions_rewards():
                 # pad the current cards to a length of 12
                 hand_cards.extend([0, 0])
 
-                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards], dtype=np.int8,
+                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+                                            # dtype=np.int8,
                                             axis=None)
 
             # ...put down Skat in the data (s, a, r)
@@ -552,7 +555,7 @@ def get_states_actions_rewards():
                 last_trick = [skat_and_cs[cs_index, 0], -1, -1]
 
                 game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                            dtype=np.int8,
+                                            # dtype=np.int8,
                                             axis=None)
 
                 # the last trick is the put Skat and padding in the beginning
@@ -563,7 +566,7 @@ def get_states_actions_rewards():
                 rewards.extend([skat_down[0].get_value(), skat_down[1].get_value()])
 
                 # if agent is player, select Skat by putting down two cards
-                actions.extend([skat_and_cs[cs_index, 1], skat_and_cs[cs_index, 2]])
+                actions.extend([skat_and_cs[cs_index, 0], skat_and_cs[cs_index, 1]])
             else:
                 # the process of Skat selection is not visible for defenders,
                 # thus it is padded and the defenders cards do not change
@@ -572,18 +575,18 @@ def get_states_actions_rewards():
                 last_trick = [0, 0, 0]
 
                 game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                            dtype=np.int8,
+                                            # dtype=np.int8,
                                             axis=None)
 
             # TODO: uniform padding with 0 -> cards from 1-32
 
-            hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
-            hand_cards.extend([0, 0])
-
-            # add starting state
-            game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                        dtype=np.int8,
-                                        axis=None)
+            # hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+            # hand_cards.extend([0, 0])
+            #
+            # # add starting state
+            # game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
+            #                             dtype=np.int8,
+            #                             axis=None)
 
             # declare the game variant, TODO: implement null rewards
             if trump == 0 or trump == 35 or trump == 46 or trump == 59:
@@ -601,7 +604,7 @@ def get_states_actions_rewards():
             # if the game is surrendered instantly
             if surrendered_trick == 0:
                 game_state, actions, rewards = \
-                    surrender(game, current_player, env, soloist_points, 0, game_state, actions, rewards)
+                    surrender(won, current_player, soloist_points, 0, game_state, actions, rewards)
             else:
                 # iterate over each trick
                 for trick in range(1, 11):
@@ -618,7 +621,8 @@ def get_states_actions_rewards():
                         hand_cards = np.pad(hand_cards, (trick + 1, 0))
 
                         game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                                    dtype=np.int8, axis=None)
+                                                    # dtype=np.int8,
+                                                    axis=None)
 
                         actions.append(skat_and_cs[cs_index, 3 * trick - 1])
 
@@ -638,7 +642,8 @@ def get_states_actions_rewards():
                         hand_cards = np.pad(hand_cards, (trick + 1, 0))
 
                         game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                                    dtype=np.int8, axis=None)
+                                                    # dtype=np.int8,
+                                                    axis=None)
 
                         actions.append(skat_and_cs[cs_index, 3 * trick])
 
@@ -659,7 +664,8 @@ def get_states_actions_rewards():
                         hand_cards = np.pad(hand_cards, (trick + 1, 0))
 
                         game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                                    dtype=np.int8, axis=None)
+                                                    # dtype=np.int8,
+                                                    axis=None)
 
                         actions.append(skat_and_cs[cs_index, 3 * trick + 1])
 
@@ -673,7 +679,7 @@ def get_states_actions_rewards():
                     # check if game was surrendered at this trick
                     if surrendered_trick == trick:
                         game_state, actions, rewards = \
-                            surrender(game, current_player, env, soloist_points, trick, game_state, actions, rewards)
+                            surrender(won, current_player, soloist_points, trick, game_state, actions, rewards)
                         break
                     else:
                         rewards.append(current_player.current_trick_points)
@@ -687,21 +693,27 @@ def get_states_actions_rewards():
                         rewards[-1] -= (skat_up[0].get_value()
                                         + skat_up[1].get_value())
 
-            if pos_tp == 0:
-                # add the points to the soloist
-                rewards[-1] += soloist_points
+            # reward system:
+            if point_rewards:
+                # if point_rewards add card points on top of achieved points...
+                if current_player.type == Player.Type.DECLARER:
+                    # add the points to the soloist (soloist points can be negative)
+                    rewards[-1] += soloist_points
+                else:
+                    # subtract the game points (soloist points can be negative)
+                    rewards[-1] -= soloist_points
             else:
-                # subtract the game points
-                rewards[-1] -= soloist_points
+                # ...otherwise, give a negative reward for lost and a positive reward for won games
+                rewards[-1] *= 1 if won else -1
 
             # in the end of each game, insert the states, actions and rewards
             # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
             # insert states
-            game_state_table[3 * cs_index + i] = np.concatenate([game[0], agent_player, game_state], axis=None)
+            game_state_table[3 * cs_index + i] = np.concatenate([float(i) for i in game_state], axis=None)  # game[0], agent_player,
             # insert actions
-            actions_table[3 * cs_index + i] = np.concatenate([game[0], agent_player, actions], axis=None)
+            actions_table[3 * cs_index + i] = np.concatenate([float(i) for i in actions], axis=None)  # game[0], agent_player,
             # insert rewards
-            rewards_table[3 * cs_index + i] = np.concatenate([game[0], agent_player, rewards], axis=None)
+            rewards_table[3 * cs_index + i] = np.concatenate([float(i) for i in rewards], axis=None)  # game[0], agent_player,
 
         cs_index = cs_index + 1
 
