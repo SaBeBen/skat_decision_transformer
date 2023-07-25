@@ -3,8 +3,6 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import random
-from sklearn.model_selection import train_test_split
 
 import decision_transformer
 
@@ -128,13 +126,13 @@ print(game_data.iloc[1, 59:60])
 # %%
 colums = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 55, 56, 58, 59]
 
-skat_data_game_frame = np.asarray(np.loadtxt(game_path, delimiter=",", dtype=int,
+game_data_np = np.asarray(np.loadtxt(game_path, delimiter=",", dtype=int,
                                              usecols=colums))
 
 # %%
-skat_data_cs_frame = np.asarray(np.loadtxt(cs_data_path, delimiter=",", dtype=int))
+cs_data_np = np.asarray(np.loadtxt(cs_data_path, delimiter=",", dtype=int))
 
-skat_and_cs = skat_data_cs_frame[:, 1:33]
+skat_and_cs_np = cs_data_np[:, 1:33]
 
 # %% Sanity Checks
 

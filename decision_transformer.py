@@ -234,7 +234,6 @@ class Env:
         self.game = Game([self.player1, self.player2, self.player3])
         self.state_machine = GameStateMachine(GameStateStart(self.game))
         # self.state_machine.handle_action(StartGameAction())
-        # TODO: init cards of each
         self.action_space = 6
         self.observation_space = 16
 
@@ -274,6 +273,7 @@ state_dim = 22
 
 # card representation is a one-hot value
 act_dim = 1
+
 
 # TODO: exchange for sql query
 # game_data = app.get_skat_data_wm()
@@ -387,6 +387,14 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
     return game_state, actions, rewards
 
 
+def discount_cumsum(x, gamma):
+    discount_cumsum = np.zeros_like(x)
+    discount_cumsum[-1] = x[-1]
+    for t in reversed(range(len(x) - 1)):
+        discount_cumsum[t] = x[t] + gamma * discount_cumsum[t + 1]
+    return discount_cumsum
+
+
 def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewards=False):
     meta_and_cards, skat_and_cs = get_game(game=championship)
 
@@ -401,9 +409,17 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
 
     rewards_table = [[] * 10] * amount_games * 3
 
-    # select available cudas for faster matrix computation
-    # device = torch.device("cuda")
+    rtg_table = [[] * 10] * amount_games * 3
+    timesteps_table = [[] * 10] * amount_games * 3
+    mask_table = [[] * 10] * amount_games * 3
 
+    # episode length for padding
+    max_len = 12
+
+    # scale for rtgs
+    scale = 1
+
+    # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0
 
     for game in meta_and_cards[:amount_games, :]:
@@ -429,7 +445,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # soloist_points: points the soloist receives for playing a certain game
             player_id, trump, hand, soloist_points = game[-8], game[-7], game[-6], game[-5]
 
-            won = ((current_player is Player.Type.DECLARER) and game[-4]) or\
+            won = ((current_player is Player.Type.DECLARER) and game[-4]) or \
                   ((current_player is Player.Type.DEFENDER) and not game[-4])
 
             # we fixate the player on an index in the data set and rotate over the index
@@ -684,9 +700,20 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     else:
                         rewards.append(current_player.current_trick_points)
 
+                    # tlen = trick
+                    # # following lines are adapted from huggingface
+                    # rtg.append(discount_cumsum(rewards, gamma=1.0).reshape((1, -1, 1)))
+                    # timesteps.append(np.arange(0, tlen).reshape(1, -1))
+                    # mask.append(np.concatenate([np.zeros((1, 12 - trick)), np.ones((1, i))], axis=1))
+                    #
+                    # # pad the rtg, timesteps and mask
+                    # rtg[-1] = np.concatenate([np.zeros((1, max_len - tlen, 1)), rtg[-1]], axis=1) / scale
+                    # timesteps[-1] = np.concatenate([np.zeros((1, max_len - tlen)), timesteps[-1]], axis=1)
+                    # mask.append(np.concatenate([np.zeros((1, max_len - tlen)), np.ones((1, tlen))], axis=1))
+
+                # if hand is played, adding the Skat points in the end of the game simulates not knowing them
                 if hand:
                     if pos_tp == 0:
-                        # if hand is played, add the Skat points in the end of the game to simulate not knowing it
                         rewards[-1] += (skat_up[0].get_value()
                                         + skat_up[1].get_value())
                     else:
@@ -709,26 +736,26 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # in the end of each game, insert the states, actions and rewards
             # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
             # insert states
-            game_state_table[3 * cs_index + i] = np.concatenate([float(i) for i in game_state], axis=None)  # game[0], agent_player,
+            game_state_table[3 * cs_index + i] = np.array_split([float(i) for i in game_state], 12)
             # insert actions
-            actions_table[3 * cs_index + i] = np.concatenate([float(i) for i in actions], axis=None)  # game[0], agent_player,
+            actions_table[3 * cs_index + i] = np.array_split([float(i) for i in actions], 12)
             # insert rewards
-            rewards_table[3 * cs_index + i] = np.concatenate([float(i) for i in rewards], axis=None)  # game[0], agent_player,
+            rewards_table[3 * cs_index + i] = np.array_split([float(i) for i in rewards], 12)
+
+            # rtg_table[3 * cs_index + i] = torch.from_numpy(np.concatenate(rtg, axis=0)).float()
+            # timesteps_table[3 * cs_index + i] = torch.from_numpy(np.concatenate(timesteps, axis=0)).long()
+            # mask_table[3 * cs_index + i] = torch.from_numpy(np.concatenate(mask, axis=0)).float()
 
         cs_index = cs_index + 1
-
-    # return game_state_table, actions_table, rewards_table
 
     return {
         "states": game_state_table,
         "actions": actions_table,
         "rewards": rewards_table,
-        # "returns_to_go": rtg,
-        # "timesteps": timesteps,
-        # "attention_mask": mask,
+        # "returns_to_go": rtg_table,
+        # "timesteps": timesteps_table,
+        # "attention_mask": mask_table,
     }
-
-# TODO: returns-to-go, timesteps, attention mask
 
 
 # the dataset is already tokenized in the database

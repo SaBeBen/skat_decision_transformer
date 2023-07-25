@@ -5,7 +5,7 @@ world championship (wc),
 
 German league “Bundesliga” (bl), 
 
-German championship (gc) (in German “deutsche Meisterschaft” dm), 
+German championship (gc) (in German “deutsche Meisterschaft”), 
 
 a DOSKV championship where only members can participate, more regional (rc) (rl) 
 
