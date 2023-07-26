@@ -9,7 +9,7 @@ from transformers import DecisionTransformerModel, TrainingArguments, Trainer, D
 # %%
 import decision_transformer
 
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 
 # %%
 dataset = decision_transformer.get_states_actions_rewards(amount_games=10)
@@ -27,7 +27,7 @@ dataset = decision_transformer.get_states_actions_rewards(amount_games=10)
 # }
 
 # %%
-dataset = Dataset.from_dict(dataset)
+dataset = DatasetDict({"train": Dataset.from_dict(dataset)})
 
 # %%
 from transformers import DataCollatorWithPadding
@@ -59,20 +59,20 @@ def get_batch_ind():  # game_length
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"
-    max_len: int = 13  # 13 subsets of the episode we use for training, our episode length is short
+    max_len: int = 12  # 13 subsets of the episode we use for training, our episode length is short
     # -> computationally cheap
     state_dim: int = 22  # 22 size of state space
     act_dim: int = 1  # 1 size of action space
-    max_ep_len: int = 13  # 13 max episode length in the dataset
-    scale: float = 13.0  # 13.0 normalization of rewards/returns
+    max_ep_len: int = 12  # 13 max episode length in the dataset
+    scale: float = 12.0  # 13.0 normalization of rewards/returns
     state_mean: np.array = None  # to store state means
     state_std: np.array = None  # to store state stds
     p_sample: np.array = None  # a distribution to take account trajectory lengths
     n_traj: int = 0  # to store the number of trajectories in the dataset TODO: do we need this?
 
     def __init__(self, dataset) -> None:
-        self.act_dim = len(dataset["actions"][0])
-        self.state_dim = len(dataset["states"][0])
+        self.act_dim = len(dataset[0]["actions"][0])
+        self.state_dim = len(dataset[0]["states"][0])
         self.dataset = dataset
         # calculate dataset stats for normalization of states
         states = []
@@ -109,11 +109,11 @@ class DecisionTransformerSkatDataCollator:
 
         # this is a bit of a hack to be able to sample of a non-uniform distribution
         # we have a random pick of the data as a batch without controlling the shape,
-        #     np.random.choice(
+        # batch_inds = np.random.choice(
         #     np.arange(self.n_traj),
         #     size=batch_size,
         #     replace=True,
-        #     p=self.p_sample,  # reweights so we sample according to timesteps
+        #     p=self.p_sample,  # reweights, so we sample according to timesteps
         # )
 
         # a batch of dataset features
@@ -121,24 +121,25 @@ class DecisionTransformerSkatDataCollator:
 
         for ind in batch_inds:
             # for feature in features:
+
             feature = self.dataset[int(ind)]
 
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
-            si = random.randint(0, len(feature["rewards"]) - 1)  # feature[]
+            # TODO: jumping randomly into a surrendered game does not work well
+            si = 0 # random.randint(0, len(feature["rewards"]) - 1)  # feature[]
 
             # get sequences from dataset
             s.append(np.array(feature["states"]  # feature[]
-                              [si * self.state_dim: si + self.max_len * self.state_dim]).reshape(1, -1, self.state_dim))
-            a.append(np.array(feature["actions"][si: si + self.max_len]).reshape(1, -1, self.act_dim))  # feature[]
-            r.append(np.array(feature["rewards"][si: si + self.max_len]).reshape(1, -1, 1))  # feature[]
+                              [si * self.state_dim: si + self.max_len]).reshape((1, -1, self.state_dim)))
+            a.append(np.array(feature["actions"][si: si + self.max_len]).reshape((1, -1, self.act_dim)))  # feature[]
+            r.append(np.array(feature["rewards"][si: si + self.max_len]).reshape((1, -1, 1)))  # feature[]
 
-            # d.append(np.array(feature["dones"][si: si + self.max_len]).reshape(1, -1))
 
             timesteps.append(np.arange(si, si + s[-1].shape[1]).reshape(1, -1))  # s[-1].shape[1]
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
-                self._discount_cumsum(np.array(dataset["rewards"][si:]), gamma=1.0)[
+                self._discount_cumsum(np.array(feature["rewards"][si:]), gamma=1.0)[
                 : s[-1].shape[1]  # TODO check the +1 removed here
                 ].reshape(1, -1, 1)
             )
@@ -147,7 +148,7 @@ class DecisionTransformerSkatDataCollator:
                 rtg[-1] = np.concatenate([rtg[-1], np.zeros((1, 1, 1))], axis=1)
 
             # padding and state + reward normalization
-            tlen = ind % 13  # s[-1].shape[1]
+            tlen = s[-1].shape[1]  # ind % 12  #
 
             # states, actions, rewards are already padded
 
@@ -155,14 +156,16 @@ class DecisionTransformerSkatDataCollator:
             s[-1] = np.concatenate([padding, s[-1]], axis=1)
 
             # state normalization
-            s[-1] = (s[-1] - self.state_mean) / self.state_std
+            # s[-1] = (s[-1] - self.state_mean) / self.state_std
 
+
+            # TODO: Problem: always adds the same padding onto the random index
             a[-1] = np.concatenate(
                 [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
                 axis=1,
             )
             r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
-            # d[-1] = np.concatenate([np.ones((1, self.max_len - tlen)) * 2, d[-1]], axis=1)
+
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1) / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
@@ -226,7 +229,7 @@ training_args = TrainingArguments(
 )
 
 # collator = DecisionTransformerSkatDataCollator(dataset)
-collator = DefaultDataCollator()
+# collator = DefaultDataCollator()
 
 # with DefaultDataCollator() or no Collator: ValueError: expected sequence of length 14 at dim 1 (got 13)
 #
@@ -240,14 +243,20 @@ configuration = DecisionTransformerConfig(state_dim=22,  # each state consist ou
                                           vocab_size=32,  # there are 32 cards, TODO: other encodings (like pos_tp)?
                                           )
 
-model = DecisionTransformerModel(configuration)
+# model = DecisionTransformerModel(configuration)
+
+collator = DecisionTransformerSkatDataCollator(dataset["train"])
+
+config = DecisionTransformerConfig(state_dim=collator.state_dim, act_dim=collator.act_dim)
+model = TrainableDT(config)
+
 
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=dataset,
-    eval_dataset=dataset,
-    # data_collator=collator,
+    train_dataset=dataset["train"],
+    # eval_dataset=dataset["train"],
+    data_collator=collator,
 )
 
 trainer.train()

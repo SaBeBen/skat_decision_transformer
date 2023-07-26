@@ -4,8 +4,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-import decision_transformer
-
 # %%
 
 """The dataset of the sequence the cards (cs) were played follows"""
