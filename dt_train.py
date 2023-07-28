@@ -14,18 +14,6 @@ from datasets import Dataset, DatasetDict
 # %%
 dataset = decision_transformer.get_states_actions_rewards(amount_games=10)
 
-# dataset = {
-#     "states": np.tile(dataset["states"][3], (100, 1)),
-#     "actions": np.tile(dataset["actions"][3], (100, 1)),
-#     "rewards": np.tile(dataset["rewards"][3], (100, 1)),
-# }
-
-# dataset = {
-#     "states": np.array_split(dataset["states"], 12),
-#     "actions": np.array_split(dataset["actions"], 12),
-#     "rewards": np.array_split(dataset["rewards"], 12),
-# }
-
 # %%
 dataset = DatasetDict({"train": Dataset.from_dict(dataset)})
 
@@ -45,7 +33,7 @@ def get_batch_ind():  # game_length
     # this picks the same game over *times* times
     # (WC GameID 4)
     times = 100
-    return np.tile(np.arange(4, 5), times)
+    return np.tile(np.arange(6, 7), times)
 
     # return np.random.choice(
     #     np.arange(n_traj),
@@ -127,14 +115,13 @@ class DecisionTransformerSkatDataCollator:
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
             # TODO: jumping randomly into a surrendered game does not work well
-            si = 0 # random.randint(0, len(feature["rewards"]) - 1)  # feature[]
+            si = 0  # random.randint(0, len(feature["rewards"]) - 1)  # feature[]
 
             # get sequences from dataset
             s.append(np.array(feature["states"]  # feature[]
-                              [si * self.state_dim: si + self.max_len]).reshape((1, -1, self.state_dim)))
-            a.append(np.array(feature["actions"][si: si + self.max_len]).reshape((1, -1, self.act_dim)))  # feature[]
-            r.append(np.array(feature["rewards"][si: si + self.max_len]).reshape((1, -1, 1)))  # feature[]
-
+                              [si: self.max_len]).reshape((1, -1, self.state_dim)))
+            a.append(np.array(feature["actions"][si:self.max_len]).reshape((1, -1, self.act_dim)))  # feature[]
+            r.append(np.array(feature["rewards"][si:self.max_len]).reshape((1, -1, 1)))  # feature[]
 
             timesteps.append(np.arange(si, si + s[-1].shape[1]).reshape(1, -1))  # s[-1].shape[1]
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
@@ -148,7 +135,7 @@ class DecisionTransformerSkatDataCollator:
                 rtg[-1] = np.concatenate([rtg[-1], np.zeros((1, 1, 1))], axis=1)
 
             # padding and state + reward normalization
-            tlen = s[-1].shape[1]  # ind % 12  #
+            tlen = s[-1].shape[1]  # ind % 12
 
             # states, actions, rewards are already padded
 
@@ -158,8 +145,6 @@ class DecisionTransformerSkatDataCollator:
             # state normalization
             # s[-1] = (s[-1] - self.state_mean) / self.state_std
 
-
-            # TODO: Problem: always adds the same padding onto the random index
             a[-1] = np.concatenate(
                 [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
                 axis=1,
@@ -219,7 +204,7 @@ class TrainableDT(DecisionTransformerModel):
 training_args = TrainingArguments(
     output_dir="output/",
     remove_unused_columns=False,
-    num_train_epochs=120,
+    num_train_epochs=360,
     per_device_train_batch_size=64,
     learning_rate=1e-4,
     weight_decay=1e-4,
@@ -231,16 +216,11 @@ training_args = TrainingArguments(
 # collator = DecisionTransformerSkatDataCollator(dataset)
 # collator = DefaultDataCollator()
 
-# with DefaultDataCollator() or no Collator: ValueError: expected sequence of length 14 at dim 1 (got 13)
-#
-# fix from stackoverflow not working
-# def tokenize_function(examples):
-#     return tokenizer(examples['text'], padding='max_length', truncation=True, max_length=286)
-
-configuration = DecisionTransformerConfig(state_dim=22,  # each state consist out of 22 numbers
-                                          act_dim=1,  # each action consists out of one played card ()
+configuration = DecisionTransformerConfig(state_dim=92,  # each state consist out of 22 numbers
+                                          act_dim=5,  # each action consists out of one played card ()
                                           max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
-                                          vocab_size=32,  # there are 32 cards, TODO: other encodings (like pos_tp)?
+                                          vocab_size=35,  # there are 32 cards + pos_tp + trump + surrender
+                                          # TODO: other encodings (like pos_tp)?
                                           )
 
 # model = DecisionTransformerModel(configuration)
@@ -249,7 +229,6 @@ collator = DecisionTransformerSkatDataCollator(dataset["train"])
 
 config = DecisionTransformerConfig(state_dim=collator.state_dim, act_dim=collator.act_dim)
 model = TrainableDT(config)
-
 
 trainer = Trainer(
     model=model,
@@ -260,9 +239,3 @@ trainer = Trainer(
 )
 
 trainer.train()
-
-# RuntimeError: mat1 and mat2 shapes cannot be multiplied (30x264 and 22x128)
-# matrices should be
-# 30x12x22 and 22x128: each state is fed separately or
-# 30x264 and 264x128: an episode is fed at once
-# in both cases -> own data collator

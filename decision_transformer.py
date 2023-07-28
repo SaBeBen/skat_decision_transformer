@@ -1,307 +1,19 @@
 from math import floor
 
 import numpy as np
-import torch
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from transformers import DecisionTransformerModel, DecisionTransformerConfig
 
+from card_representation_conversion import convert_one_hot_to_card, convert_one_hot_to_vector, convert_card_to_vec
 from game.game import Game
 from game.game_state_machine import GameStateMachine
 from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
 from game.state.game_state_bid import DeclareGameVariantAction, PutDownSkatAction, BidCallAction, BidPassAction, \
     PickUpSkatAction
-from game.state.game_state_start import GameStateStart, StartGameAction
+from game.state.game_state_start import GameStateStart
 from game.state.game_state_play import PlayCardAction
 
 from model.player import Player
 from model.card import Card
-
-from transformers import TrainingArguments
-from transformers import AutoTokenizer
-from transformers import DataCollatorWithPadding
-from transformers import Trainer
-
-
-def convert_vec_to_card(card):
-    vector_rep = {
-        [0, 0, 0, 1, 7]: Card(Card.Suit.CLUB, Card.Face.ACE),  # A♣
-        [0, 0, 0, 1, 5]: Card(Card.Suit.CLUB, Card.Face.KING),  # K♣
-        [0, 0, 0, 1, 4]: Card(Card.Suit.CLUB, Card.Face.QUEEN),  # Q♣
-        [0, 0, 0, 1, 8]: Card(Card.Suit.CLUB, Card.Face.JACK),  # J♣
-        [0, 0, 0, 1, 6]: Card(Card.Suit.CLUB, Card.Face.TEN),  # 10♣
-        [0, 0, 0, 1, 3]: Card(Card.Suit.CLUB, Card.Face.NINE),  # 9♣
-        [0, 0, 0, 1, 2]: Card(Card.Suit.CLUB, Card.Face.EIGHT),  # 8♣
-        [0, 0, 0, 1, 1]: Card(Card.Suit.CLUB, Card.Face.SEVEN),  # 7♣
-        [0, 0, 0, 1, 7]: Card(Card.Suit.SPADE, Card.Face.ACE),  # A♠
-        [0, 0, 0, 1, 5]: Card(Card.Suit.SPADE, Card.Face.KING),  # K♠
-        [0, 0, 1, 0, 4]: Card(Card.Suit.SPADE, Card.Face.QUEEN),  # Q♠
-        [0, 0, 1, 0, 8]: Card(Card.Suit.SPADE, Card.Face.JACK),  # J♠
-        [0, 0, 1, 0, 6]: Card(Card.Suit.SPADE, Card.Face.TEN),  # 10♠
-        [0, 0, 1, 0, 3]: Card(Card.Suit.SPADE, Card.Face.NINE),  # 9♠
-        [0, 0, 1, 0, 2]: Card(Card.Suit.SPADE, Card.Face.EIGHT),  # 8♠
-        [0, 0, 1, 0, 1]: Card(Card.Suit.SPADE, Card.Face.SEVEN),  # 7♠
-        [0, 1, 0, 0, 7]: Card(Card.Suit.HEARTS, Card.Face.ACE),  # A♥
-        [0, 1, 0, 0, 5]: Card(Card.Suit.HEARTS, Card.Face.KING),  # K♥
-        [0, 1, 0, 0, 4]: Card(Card.Suit.HEARTS, Card.Face.QUEEN),  # Q♥
-        [0, 1, 0, 0, 8]: Card(Card.Suit.HEARTS, Card.Face.JACK),  # J♥
-        [0, 1, 0, 0, 6]: Card(Card.Suit.HEARTS, Card.Face.TEN),  # 10♥
-        [0, 1, 0, 0, 3]: Card(Card.Suit.HEARTS, Card.Face.NINE),  # 9♥
-        [0, 1, 0, 0, 2]: Card(Card.Suit.HEARTS, Card.Face.EIGHT),  # 8♥
-        [0, 1, 0, 0, 1]: Card(Card.Suit.HEARTS, Card.Face.SEVEN),  # 7♥
-        [1, 0, 0, 0, 7]: Card(Card.Suit.DIAMOND, Card.Face.ACE),  # A♦
-        [1, 0, 0, 0, 5]: Card(Card.Suit.DIAMOND, Card.Face.KING),  # K♦
-        [1, 0, 0, 0, 4]: Card(Card.Suit.DIAMOND, Card.Face.QUEEN),  # Q♦
-        [1, 0, 0, 0, 8]: Card(Card.Suit.DIAMOND, Card.Face.JACK),  # J♦
-        [1, 0, 0, 0, 6]: Card(Card.Suit.DIAMOND, Card.Face.TEN),  # 10♦
-        [1, 0, 0, 0, 3]: Card(Card.Suit.DIAMOND, Card.Face.NINE),  # 9♦
-        [1, 0, 0, 0, 2]: Card(Card.Suit.DIAMOND, Card.Face.EIGHT),  # 8♦
-        [1, 0, 0, 0, 1]: Card(Card.Suit.DIAMOND, Card.Face.SEVEN)  # 7♦
-    }
-    converted_card = vector_rep[card]
-
-    return converted_card
-
-
-def convert_card_to_vec(card):
-    vector_rep = {
-        Card(Card.Suit.CLUB, Card.Face.ACE): [0, 0, 0, 1, 7],  # A♣
-        Card(Card.Suit.CLUB, Card.Face.KING): [0, 0, 0, 1, 5],  # K♣
-        Card(Card.Suit.CLUB, Card.Face.QUEEN): [0, 0, 0, 1, 4],  # Q♣
-        Card(Card.Suit.CLUB, Card.Face.JACK): [0, 0, 0, 1, 8],  # J♣
-        Card(Card.Suit.CLUB, Card.Face.TEN): [0, 0, 0, 1, 6],  # 10♣
-        Card(Card.Suit.CLUB, Card.Face.NINE): [0, 0, 0, 1, 3],  # 9♣
-        Card(Card.Suit.CLUB, Card.Face.EIGHT): [0, 0, 0, 1, 2],  # 8♣
-        Card(Card.Suit.CLUB, Card.Face.SEVEN): [0, 0, 0, 1, 1],  # 7♣
-        Card(Card.Suit.SPADE, Card.Face.ACE): [0, 0, 1, 0, 7],  # A♠
-        Card(Card.Suit.SPADE, Card.Face.KING): [0, 0, 1, 0, 5],  # K♠
-        Card(Card.Suit.SPADE, Card.Face.QUEEN): [0, 0, 1, 0, 4],  # Q♠
-        Card(Card.Suit.SPADE, Card.Face.JACK): [0, 0, 1, 0, 8],  # J♠
-        Card(Card.Suit.SPADE, Card.Face.TEN): [0, 0, 1, 0, 6],  # 10♠
-        Card(Card.Suit.SPADE, Card.Face.NINE): [0, 0, 1, 0, 3],  # 9♠
-        Card(Card.Suit.SPADE, Card.Face.EIGHT): [0, 0, 1, 0, 2],  # 8♠
-        Card(Card.Suit.SPADE, Card.Face.SEVEN): [0, 0, 1, 0, 1],  # 7♠
-        Card(Card.Suit.HEARTS, Card.Face.ACE): [0, 1, 0, 0, 7],  # A♥
-        Card(Card.Suit.HEARTS, Card.Face.KING): [0, 1, 0, 0, 5],  # K♥
-        Card(Card.Suit.HEARTS, Card.Face.QUEEN): [0, 1, 0, 0, 4],  # Q♥
-        Card(Card.Suit.HEARTS, Card.Face.JACK): [0, 1, 0, 0, 8],  # J♥
-        Card(Card.Suit.HEARTS, Card.Face.TEN): [0, 1, 0, 0, 6],  # 10♥
-        Card(Card.Suit.HEARTS, Card.Face.NINE): [0, 1, 0, 0, 3],  # 9♥
-        Card(Card.Suit.HEARTS, Card.Face.EIGHT): [0, 1, 0, 0, 2],  # 8♥
-        Card(Card.Suit.HEARTS, Card.Face.SEVEN): [0, 1, 0, 0, 1],  # 7♥
-        Card(Card.Suit.DIAMOND, Card.Face.ACE): [1, 0, 0, 0, 7],  # A♦
-        Card(Card.Suit.DIAMOND, Card.Face.KING): [1, 0, 0, 0, 5],  # K♦
-        Card(Card.Suit.DIAMOND, Card.Face.QUEEN): [1, 0, 0, 0, 4],  # Q♦
-        Card(Card.Suit.DIAMOND, Card.Face.JACK): [1, 0, 0, 0, 8],  # J♦
-        Card(Card.Suit.DIAMOND, Card.Face.TEN): [1, 0, 0, 0, 6],  # 10♦
-        Card(Card.Suit.DIAMOND, Card.Face.NINE): [1, 0, 0, 0, 3],  # 9♦
-        Card(Card.Suit.DIAMOND, Card.Face.EIGHT): [1, 0, 0, 0, 2],  # 8♦
-        Card(Card.Suit.DIAMOND, Card.Face.SEVEN): [1, 0, 0, 0, 1]  # 7♦
-    }
-    converted_card = vector_rep[card]
-
-    return converted_card
-
-
-def convert_card_to_one_hot(card):
-    vector_rep = {
-        Card(Card.Suit.CLUB, Card.Face.ACE): 1,  # A♣
-        Card(Card.Suit.CLUB, Card.Face.KING): 2,  # K♣
-        Card(Card.Suit.CLUB, Card.Face.QUEEN): 3,  # Q♣
-        Card(Card.Suit.CLUB, Card.Face.JACK): 4,  # J♣
-        Card(Card.Suit.CLUB, Card.Face.TEN): 5,  # 10♣
-        Card(Card.Suit.CLUB, Card.Face.NINE): 6,  # 9♣
-        Card(Card.Suit.CLUB, Card.Face.EIGHT): 7,  # 8♣
-        Card(Card.Suit.CLUB, Card.Face.SEVEN): 8,  # 7♣
-        Card(Card.Suit.SPADE, Card.Face.ACE): 9,  # A♠
-        Card(Card.Suit.SPADE, Card.Face.KING): 10,  # K♠
-        Card(Card.Suit.SPADE, Card.Face.QUEEN): 11,  # Q♠
-        Card(Card.Suit.SPADE, Card.Face.JACK): 12,  # J♠
-        Card(Card.Suit.SPADE, Card.Face.TEN): 13,  # 10♠
-        Card(Card.Suit.SPADE, Card.Face.NINE): 14,  # 9♠
-        Card(Card.Suit.SPADE, Card.Face.EIGHT): 15,  # 8♠
-        Card(Card.Suit.SPADE, Card.Face.SEVEN): 16,  # 7♠
-        Card(Card.Suit.HEARTS, Card.Face.ACE): 17,  # A♥
-        Card(Card.Suit.HEARTS, Card.Face.KING): 18,  # K♥
-        Card(Card.Suit.HEARTS, Card.Face.QUEEN): 19,  # Q♥
-        Card(Card.Suit.HEARTS, Card.Face.JACK): 20,  # J♥
-        Card(Card.Suit.HEARTS, Card.Face.TEN): 21,  # 10♥
-        Card(Card.Suit.HEARTS, Card.Face.NINE): 22,  # 9♥
-        Card(Card.Suit.HEARTS, Card.Face.EIGHT): 23,  # 8♥
-        Card(Card.Suit.HEARTS, Card.Face.SEVEN): 24,  # 7♥
-        Card(Card.Suit.DIAMOND, Card.Face.ACE): 25,  # A♦
-        Card(Card.Suit.DIAMOND, Card.Face.KING): 26,  # K♦
-        Card(Card.Suit.DIAMOND, Card.Face.QUEEN): 27,  # Q♦
-        Card(Card.Suit.DIAMOND, Card.Face.JACK): 28,  # J♦
-        Card(Card.Suit.DIAMOND, Card.Face.TEN): 29,  # 10♦
-        Card(Card.Suit.DIAMOND, Card.Face.NINE): 30,  # 9♦
-        Card(Card.Suit.DIAMOND, Card.Face.EIGHT): 31,  # 8♦
-        Card(Card.Suit.DIAMOND, Card.Face.SEVEN): 32  # 7♦
-    }
-    converted_card = vector_rep[card]
-
-    return converted_card
-
-
-def convert_one_hot_to_vector(card):
-    # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
-    vector_rep = {
-        0: [0, 0, 0, 1, 7],  # A♣
-        1: [0, 0, 0, 1, 6],  # K♣
-        2: [0, 0, 0, 1, 5],  # Q♣
-        3: [0, 0, 0, 1, 8],  # J♣
-        4: [0, 0, 0, 1, 4],  # 10♣
-        5: [0, 0, 0, 1, 3],  # 9♣
-        6: [0, 0, 0, 1, 2],  # 8♣
-        7: [0, 0, 0, 1, 1],  # 7♣
-        8: [0, 0, 1, 0, 7],  # A♠
-        9: [0, 0, 1, 0, 6],  # K♠
-        10: [0, 0, 1, 0, 5],  # Q♠
-        11: [0, 0, 1, 0, 8],  # J♠
-        12: [0, 0, 1, 0, 4],  # 10♠
-        13: [0, 0, 1, 0, 3],  # 9♠
-        14: [0, 0, 1, 0, 2],  # 8♠
-        15: [0, 0, 1, 0, 1],  # 7♠
-        16: [0, 1, 0, 0, 7],  # A♥
-        17: [0, 1, 0, 0, 6],  # K♥
-        18: [0, 1, 0, 0, 5],  # Q♥
-        19: [0, 1, 0, 0, 8],  # J♥
-        20: [0, 1, 0, 0, 4],  # 10♥
-        21: [0, 1, 0, 0, 3],  # 9♥
-        22: [0, 1, 0, 0, 2],  # 8♥
-        23: [0, 1, 0, 0, 1],  # 7♥
-        24: [1, 0, 0, 0, 7],  # A♦
-        25: [1, 0, 0, 0, 6],  # K♦
-        26: [1, 0, 0, 0, 5],  # Q♦
-        27: [1, 0, 0, 0, 8],  # J♦
-        28: [1, 0, 0, 0, 4],  # 10♦
-        29: [1, 0, 0, 0, 3],  # 9♦
-        30: [1, 0, 0, 0, 2],  # 8♦
-        31: [1, 0, 0, 0, 1]  # 7♦
-    }
-    converted_card = vector_rep[card]
-
-    return converted_card
-
-
-# def convert_one_hot_to_card(card):
-#     vector_rep = {
-#         1: Card(Card.Suit.CLUB, Card.Face.ACE),  # A♣
-#         2: Card(Card.Suit.CLUB, Card.Face.KING),  # K♣
-#         3: Card(Card.Suit.CLUB, Card.Face.QUEEN),  # Q♣
-#         4: Card(Card.Suit.CLUB, Card.Face.JACK),  # J♣
-#         5: Card(Card.Suit.CLUB, Card.Face.TEN),  # 10♣
-#         6: Card(Card.Suit.CLUB, Card.Face.NINE),  # 9♣
-#         7: Card(Card.Suit.CLUB, Card.Face.EIGHT),  # 8♣
-#         8: Card(Card.Suit.CLUB, Card.Face.SEVEN),  # 7♣
-#         9: Card(Card.Suit.SPADE, Card.Face.ACE),  # A♠
-#         10: Card(Card.Suit.SPADE, Card.Face.KING),  # K♠
-#         11: Card(Card.Suit.SPADE, Card.Face.QUEEN),  # Q♠
-#         12: Card(Card.Suit.SPADE, Card.Face.JACK),  # J♠
-#         13: Card(Card.Suit.SPADE, Card.Face.TEN),  # 10♠
-#         14: Card(Card.Suit.SPADE, Card.Face.NINE),  # 9♠
-#         15: Card(Card.Suit.SPADE, Card.Face.EIGHT),  # 8♠
-#         16: Card(Card.Suit.SPADE, Card.Face.SEVEN),  # 7♠
-#         17: Card(Card.Suit.HEARTS, Card.Face.ACE),  # A♥
-#         18: Card(Card.Suit.HEARTS, Card.Face.KING),  # K♥
-#         19: Card(Card.Suit.HEARTS, Card.Face.QUEEN),  # Q♥
-#         20: Card(Card.Suit.HEARTS, Card.Face.JACK),  # J♥
-#         21: Card(Card.Suit.HEARTS, Card.Face.TEN),  # 10♥
-#         22: Card(Card.Suit.HEARTS, Card.Face.NINE),  # 9♥
-#         23: Card(Card.Suit.HEARTS, Card.Face.EIGHT),  # 8♥
-#         24: Card(Card.Suit.HEARTS, Card.Face.SEVEN),  # 7♥
-#         25: Card(Card.Suit.DIAMOND, Card.Face.ACE),  # A♦
-#         26: Card(Card.Suit.DIAMOND, Card.Face.KING),  # K♦
-#         27: Card(Card.Suit.DIAMOND, Card.Face.QUEEN),  # Q♦
-#         28: Card(Card.Suit.DIAMOND, Card.Face.JACK),  # J♦
-#         29: Card(Card.Suit.DIAMOND, Card.Face.TEN),  # 10♦
-#         30: Card(Card.Suit.DIAMOND, Card.Face.NINE),  # 9♦
-#         31: Card(Card.Suit.DIAMOND, Card.Face.EIGHT),  # 8♦
-#         32: Card(Card.Suit.DIAMOND, Card.Face.SEVEN)  # 7♦
-#     }
-#     converted_card = vector_rep[card]
-#
-#     return converted_card
-
-
-def convert_one_hot_to_card(card):
-    # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
-    vector_rep = {
-        0: Card(Card.Suit.CLUB, Card.Face.ACE),  # A♣
-        1: Card(Card.Suit.CLUB, Card.Face.KING),  # K♣
-        2: Card(Card.Suit.CLUB, Card.Face.QUEEN),  # Q♣
-        3: Card(Card.Suit.CLUB, Card.Face.JACK),  # J♣
-        4: Card(Card.Suit.CLUB, Card.Face.TEN),  # 10♣
-        5: Card(Card.Suit.CLUB, Card.Face.NINE),  # 9♣
-        6: Card(Card.Suit.CLUB, Card.Face.EIGHT),  # 8♣
-        7: Card(Card.Suit.CLUB, Card.Face.SEVEN),  # 7♣
-        8: Card(Card.Suit.SPADE, Card.Face.ACE),  # A♠
-        9: Card(Card.Suit.SPADE, Card.Face.KING),  # K♠
-        10: Card(Card.Suit.SPADE, Card.Face.QUEEN),  # Q♠
-        11: Card(Card.Suit.SPADE, Card.Face.JACK),  # J♠
-        12: Card(Card.Suit.SPADE, Card.Face.TEN),  # 10♠
-        13: Card(Card.Suit.SPADE, Card.Face.NINE),  # 9♠
-        14: Card(Card.Suit.SPADE, Card.Face.EIGHT),  # 8♠
-        15: Card(Card.Suit.SPADE, Card.Face.SEVEN),  # 7♠
-        16: Card(Card.Suit.HEARTS, Card.Face.ACE),  # A♥
-        17: Card(Card.Suit.HEARTS, Card.Face.KING),  # K♥
-        18: Card(Card.Suit.HEARTS, Card.Face.QUEEN),  # Q♥
-        19: Card(Card.Suit.HEARTS, Card.Face.JACK),  # J♥
-        20: Card(Card.Suit.HEARTS, Card.Face.TEN),  # 10♥
-        21: Card(Card.Suit.HEARTS, Card.Face.NINE),  # 9♥
-        22: Card(Card.Suit.HEARTS, Card.Face.EIGHT),  # 8♥
-        23: Card(Card.Suit.HEARTS, Card.Face.SEVEN),  # 7♥
-        24: Card(Card.Suit.DIAMOND, Card.Face.ACE),  # A♦
-        25: Card(Card.Suit.DIAMOND, Card.Face.KING),  # K♦
-        26: Card(Card.Suit.DIAMOND, Card.Face.QUEEN),  # Q♦
-        27: Card(Card.Suit.DIAMOND, Card.Face.JACK),  # J♦
-        28: Card(Card.Suit.DIAMOND, Card.Face.TEN),  # 10♦
-        29: Card(Card.Suit.DIAMOND, Card.Face.NINE),  # 9♦
-        30: Card(Card.Suit.DIAMOND, Card.Face.EIGHT),  # 8♦
-        31: Card(Card.Suit.DIAMOND, Card.Face.SEVEN)  # 7♦
-    }
-    converted_card = vector_rep[card]
-
-    return converted_card
-
-
-# the card representation: one token represents one card which is encoded as a vector
-# convert data to following encoding:
-# ♦, ♥, ♠, ♣, {7, 8, 9, Q, K, 10, A, J}, T
-all_cards = [
-    [0, 0, 0, 1, 7, 0],  # A♣
-    [0, 0, 0, 1, 5, 0],  # K♣
-    [0, 0, 0, 1, 4, 0],  # Q♣
-    [0, 0, 0, 1, 8, 1],  # J♣
-    [0, 0, 0, 1, 6, 0],  # 10♣
-    [0, 0, 0, 1, 3, 0],  # 9♣
-    [0, 0, 0, 1, 2, 0],  # 8♣
-    [0, 0, 0, 1, 1, 0],  # 7♣
-    [0, 0, 0, 1, 7, 0],  # A♠
-    [0, 0, 0, 1, 5, 0],  # K♠
-    [0, 0, 1, 0, 4, 0],  # Q♠
-    [0, 0, 1, 0, 8, 1],  # J♠
-    [0, 0, 1, 0, 6, 0],  # 10♠
-    [0, 0, 1, 0, 3, 0],  # 9♠
-    [0, 0, 1, 0, 2, 0],  # 8♠
-    [0, 0, 1, 0, 1, 0],  # 7♠
-    [0, 1, 0, 0, 7, 0],  # A♥
-    [0, 1, 0, 0, 5, 0],  # K♥
-    [0, 1, 0, 0, 4, 0],  # Q♥
-    [0, 1, 0, 0, 8, 1],  # J♥
-    [0, 1, 0, 0, 6, 0],  # 10♥
-    [0, 1, 0, 0, 3, 0],  # 9♥
-    [0, 1, 0, 0, 2, 0],  # 8♥
-    [0, 1, 0, 0, 1, 0],  # 7♥
-    [1, 0, 0, 0, 7, 0],  # A♦
-    [1, 0, 0, 0, 5, 0],  # K♦
-    [1, 0, 0, 0, 4, 0],  # Q♦
-    [1, 0, 0, 0, 8, 1],  # J♦
-    [1, 0, 0, 0, 6, 0],  # 10♦
-    [1, 0, 0, 0, 3, 0],  # 9♦
-    [1, 0, 0, 0, 2, 0],  # 8♦
-    [1, 0, 0, 0, 1, 0]  # 7♦
-]
 
 
 class Env:
@@ -339,7 +51,7 @@ class Env:
         state = self.player1.cards
 
         # Return state, reward
-        return torch.stack(), reward
+        return reward
 
     # def train(self):
     #     self.training = True
@@ -348,15 +60,12 @@ class Env:
     #     self.training = False
 
 
-# position co-player (1) + trump (4) + last trick (3) + open cards (2) + hand cards (12) = 22
-state_dim = 22
+# position co-player (1) + trump (4) + last trick (3 * act_dim) + open cards (2 * act_dim) + hand cards (12 * act_dim)
+state_dim = 92
 
-# card representation is a one-hot value
-act_dim = 1
+# card representation is a vector
+act_dim = 5
 
-
-# TODO: exchange for sql query
-# game_data = app.get_skat_data_wm()
 
 def get_trump(trump, enc="cat"):
     if enc == "cat":
@@ -449,20 +158,17 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
     if won:
         # add reward and player points as last reward
         rewards.append(current_player.current_trick_points + soloist_points)
-        actions.append(0)
+        actions.extend([0] * act_dim)
     else:
         # action of surrendering
-        actions.append(-2)
+        actions.append([-2] * act_dim)
         # default behaviour (gives a negative reward here)
         rewards.append(current_player.current_trick_points)
 
-    # pad the states with 0s
-    game_state = np.pad(game_state, (0, (11 - trick - 1) * state_dim))
-
-    actions = np.pad(actions, (0, 11 - trick - 2))
-
-    # pad the rewards with 0s
-    rewards = np.pad(rewards, (0, 11 - trick - 1))
+    # pad the states, actions and rewards with 0s
+    game_state = np.concatenate([game_state, ([0] * state_dim) * (10 - trick)])
+    actions = actions + [[0] * act_dim] * (9 - trick)
+    rewards = rewards + [0] * (10 - trick)
 
     return game_state, actions, rewards
 
@@ -473,6 +179,25 @@ def discount_cumsum(x, gamma):
     for t in reversed(range(len(x) - 1)):
         discount_cumsum[t] = x[t] + gamma * discount_cumsum[t + 1]
     return discount_cumsum
+
+
+def initialise_hand_cards(game, current_player, current_player2, current_player3, i):
+    # TODO: access the player card with fast search, for instance binary search
+    # ...instead, initialise the hand cards
+    current_player.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + 10 * i:14 + 10 * i].tolist()])
+    current_player2.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + ((10 + 10 * i) % 30):4 + ((20 + 10 * i - 1) % 30 + 1)].tolist()])
+    current_player3.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + ((20 + 10 * i) % 30):4 + ((30 + 10 * i - 1) % 30 + 1)].tolist()])
+
+    # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
+    current_player.cards.sort()
+    current_player2.cards.sort()
+    current_player3.cards.sort()
 
 
 def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewards=False):
@@ -489,15 +214,15 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
 
     rewards_table = [[] * 10] * amount_games * 3
 
-    rtg_table = [[] * 10] * amount_games * 3
-    timesteps_table = [[] * 10] * amount_games * 3
-    mask_table = [[] * 10] * amount_games * 3
+    # rtg_table = [[] * 10] * amount_games * 3
+    # timesteps_table = [[] * 10] * amount_games * 3
+    # mask_table = [[] * 10] * amount_games * 3
 
-    # episode length for padding
-    max_len = 12
-
-    # scale for rtgs
-    scale = 1
+    # # episode length for padding
+    # max_len = 12
+    #
+    # # scale for rtgs
+    # scale = 1
 
     # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0
@@ -549,22 +274,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # skip start of the game (shuffling and dealing)
             env.state_machine.state_finished_handler()
 
-            # ...instead, initialise the hand cards
-            current_player.set_cards(
-                [convert_one_hot_to_card(card) for card in
-                 game[4 + 10 * i:14 + 10 * i].tolist()])
-            current_player2.set_cards(
-                [convert_one_hot_to_card(card) for card in
-                 game[4 + ((10 + 10 * i) % 30):4 + ((20 + 10 * i - 1) % 30 + 1)].tolist()])
-            current_player3.set_cards(
-                [convert_one_hot_to_card(card) for card in
-                 game[4 + ((20 + 10 * i) % 30):4 + ((30 + 10 * i - 1) % 30 + 1)].tolist()])
-
-            # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
-            current_player.cards.sort()
-            current_player2.cards.sort()
-            current_player3.cards.sort()
-            # TODO: access the player card with fast search, for instance binary search
+            initialise_hand_cards(game, current_player, current_player2, current_player3, i)
 
             # initialise Skat in the environment
             env.game.skat.extend([skat_up[0], skat_up[1]])
@@ -572,8 +282,8 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # initialise roles, encode positions and simulate bidding
             if agent_player == player_id:
 
-                # encode the position of the team partner
-                pos_tp = 0
+                # encode the position of the team partner: 0 for self, 1 for team, -1 for opponent
+                pos_tp = [-1, 0, -1]  # 0
                 # used to encode position of agent for game identification
                 agent_player = i
                 soloist = current_player
@@ -587,7 +297,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             else:
                 current_player.type = Player.Type.DEFENDER
                 if player_id == game[1 + (i + 1) % 3]:
-                    pos_tp = 2
+                    pos_tp = [1, 0, -1]  # 2
                     agent_player = (i + 1) % 3
                     soloist = current_player2
 
@@ -597,7 +307,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     env.state_machine.handle_action(BidPassAction(current_player, 18))
                     env.state_machine.handle_action(BidPassAction(current_player3, 18))
                 else:
-                    pos_tp = 1
+                    pos_tp = [-1, 0, 1]  # 1
                     agent_player = (i + 2) % 3
                     soloist = current_player3
 
@@ -608,18 +318,18 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     env.state_machine.handle_action(BidPassAction(current_player2, 18))
 
             # there is no card revealed during Skat putting
-            open_cards = [-1, -1]
+            open_cards = [[0] * act_dim, [0] * act_dim]
 
             # during Skat selection, there is no last trick,
             # it will only be the last trick for the soloist when putting the Skat down
-            last_trick = [-1, -1, -1]
+            last_trick = [[0] * act_dim, [0] * act_dim, [0] * act_dim]
 
             if not hand:
                 # pick up the Skat
                 env.state_machine.handle_action(PickUpSkatAction(soloist))
 
                 # update hand cards: they will contain the Skat
-                hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+                hand_cards = [convert_card_to_vec(card) for card in current_player.cards]
 
                 if soloist != current_player:
                     # pad the current cards to a length of 12, if agent does not pick up Skat
@@ -634,7 +344,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 env.state_machine.handle_action(PutDownSkatAction(soloist, skat_down))
             else:
                 # update hand cards: they will not contain the Skat
-                hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+                hand_cards = [convert_card_to_vec(card) for card in current_player.cards]
 
                 # pad the current cards to a length of 12
                 hand_cards.extend([[0] * act_dim, [0] * act_dim])
@@ -670,7 +380,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 # the process of Skat selection is not visible for defenders,
                 # thus it is padded and the defenders cards do not change
                 actions.extend([[0] * act_dim, [0] * act_dim])
-                rewards.extend([[0] * act_dim, [0] * act_dim])
+                rewards.extend([0, 0])
                 last_trick = [[0] * act_dim, [0] * act_dim, [0] * act_dim]
 
                 game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
@@ -678,14 +388,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                                             axis=None)
 
             # TODO: uniform padding with 0 -> cards from 1-32
-
-            # hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
-            # hand_cards.extend([0, 0])
-            #
-            # # add starting state
-            # game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-            #                             dtype=np.int8,
-            #                             axis=None)
 
             # declare the game variant, TODO: implement null rewards
             if trump == 0 or trump == 35 or trump == 46 or trump == 59:
@@ -714,10 +416,10 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                         open_cards = [[0] * act_dim, [0] * act_dim]
 
                         # convert each card to the desired encoding
-                        hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+                        hand_cards = [convert_card_to_vec(card) for card in current_player.cards]
 
                         # pad the cards to a length of 12
-                        hand_cards = np.pad(hand_cards, (trick * act_dim + 1, 0))
+                        hand_cards = [act_dim * [0]] * (trick + 1) + hand_cards
 
                         game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
                                                     # dtype=np.int8,
@@ -735,10 +437,10 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                         open_cards = [convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick - 1]), [0] * act_dim]
 
                         # convert each card to the desired encoding
-                        hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+                        hand_cards = [convert_card_to_vec(card) for card in current_player.cards]
 
                         # pad the cards to a length of 12
-                        hand_cards = np.pad(hand_cards, (trick * act_dim + 1, 0))
+                        hand_cards = [act_dim * [0]] * (trick + 1) + hand_cards
 
                         game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
                                                     # dtype=np.int8,
@@ -757,10 +459,10 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                                       convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick])]
 
                         # convert each card to the desired encoding
-                        hand_cards = [convert_card_to_one_hot(card) for card in current_player.cards]
+                        hand_cards = [convert_card_to_vec(card) for card in current_player.cards]
 
                         # pad the cards to a length of 12
-                        hand_cards = np.pad(hand_cards, (trick * act_dim + 1, 0))
+                        hand_cards = [act_dim * [0]] * (trick + 1) + hand_cards
 
                         game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
                                                     # dtype=np.int8,
