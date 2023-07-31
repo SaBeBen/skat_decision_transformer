@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from card_representation_conversion import convert_one_hot_to_card, convert_one_hot_to_vector, convert_card_to_vec
-from environment import Env
+from environment import Env, get_trump
 
 from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
 from game.state.game_state_bid import DeclareGameVariantAction, PutDownSkatAction, BidCallAction, BidPassAction, \
@@ -19,18 +19,6 @@ state_dim = 92
 
 # card representation is a vector
 act_dim = 5
-
-
-def get_trump(trump, enc="cat"):
-    if enc == "cat":
-        # if categorical encoding of suits is activated
-        return [1 if trump == 12 or trump == 24 else 0, 1 if trump == 11 or trump == 24 else 0,
-                1 if trump == 10 or trump == 24 else 0, 1 if trump == 9 or trump == 24 else 0]
-    elif 8 < trump < 13:
-        return trump - 9
-    else:
-        return trump
-
 
 def get_game(game="wc"):
     possible_championships = ["wc", "gc", "gtc", "bl", "rc"]
@@ -510,8 +498,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
         # "attention_mask": mask_table,
     }
 
-
-TARGET_RETURN = 61
 
 # --------------------------------------------------------------------------------------------------------------------
 # from https://huggingface.co/blog/train-decision-transformers

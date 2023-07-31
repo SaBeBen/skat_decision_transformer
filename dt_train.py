@@ -4,17 +4,20 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from tqdm import tqdm
-from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig, \
-    DefaultDataCollator, BertTokenizer
+from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
+from transformers.models import decision_transformer
+
 # %%
 import data_pipeline
 
 from datasets import Dataset, DatasetDict
 
+import environment
+
 # %%
-dataset = decision_transformer.get_states_actions_rewards(amount_games=10,
-                                                          # point_rewards=True
-                                                          )
+dataset = data_pipeline.get_states_actions_rewards(amount_games=10,
+                                                   # point_rewards=True
+                                                   )
 
 # %%
 dataset = DatasetDict({"train": Dataset.from_dict(dataset)})
@@ -52,7 +55,7 @@ def get_batch_ind():  # game_length
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"
-    max_len: int = 3  # subsets of the episode we use for training, our episode length is short
+    max_len: int = 6  # subsets of the episode we use for training, our episode length is short
     state_dim: int = state_dim  # size of state space
     act_dim: int = act_dim  # size of action space
     max_ep_len: int = 12  # max episode length in the dataset
@@ -80,7 +83,7 @@ class DecisionTransformerSkatDataCollator:
         self.p_sample = traj_lens / sum(traj_lens)
 
     def _discount_cumsum(self, x, gamma):
-        # TODO: apply weighted reward
+        # weighted rewards are in the data set (get_states_actions_rewards)
         discount_cumsum = np.zeros_like(x)
         discount_cumsum[-1] = x[-1]
         for t in reversed(range(x.shape[0] - 1)):
@@ -153,7 +156,7 @@ class DecisionTransformerSkatDataCollator:
             )
             r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
 
-            rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1) / self.scale
+            rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1) #/ self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
 
@@ -250,10 +253,13 @@ trainer = Trainer(
 
 trainer.train()
 
-# TODO: evaluation, reset env
+
+# %%
+
+# TODO: evaluation
 
 # select available cudas for faster matrix computation
-device = torch.device("cuda")
+# device = torch.device("cuda")
 
 TARGET_RETURN = 61
 
@@ -261,7 +267,7 @@ TARGET_RETURN = 61
 # model = model.to(device)
 model.eval()
 
-env = decision_transformer.Env()
+env = environment.Env()
 
 
 # Function that gets an action from the model using autoregressive prediction
@@ -312,7 +318,7 @@ scale = 1
 # state_std = torch.from_numpy(state_std)
 
 # build the environment for the evaluation
-state = env.reset()  # TODO
+state = env.reset(env.player1)  # TODO
 target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
 states = torch.from_numpy(state).reshape(1, state_dim).float()
 actions = torch.zeros((0, act_dim)).float()
@@ -332,6 +338,8 @@ for t in range(MAX_EPISODE_LENGTH):
                         rewards,
                         target_return,
                         timesteps)
+
+    print(f"action {t}: {action}")
     actions[-1] = action
     action = action.detach().numpy()
 

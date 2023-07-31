@@ -84,6 +84,7 @@ class Game:
     def clear_cards(self):
         self.skat.clear()
         for player in self.players:
+            player.current_trick_points = 0
             player.cards.clear()
             player.trick_stack.clear()
 

@@ -49,6 +49,10 @@ class GameStateStart(GameState):
         self.game.players[1].cards.extend(self.game.card_deck[26:29])
         self.game.players[2].cards.extend(self.game.card_deck[29:32])
 
+        self.game.players[0].cards.sort()
+        self.game.players[1].cards.sort()
+        self.game.players[2].cards.sort()
+
     def get_next_state(self):
         return GameStateBid(self.game)
 
