@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from flask import Flask
 
-from decision_transformer import convert_one_hot_to_card, Env, convert_card_to_one_hot
+from data_pipeline import convert_one_hot_to_card, Env, convert_card_to_one_hot
 from game.state.game_state_play import PlayCardAction
 from model.player import Player
 

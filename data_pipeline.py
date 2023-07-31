@@ -4,63 +4,17 @@ import numpy as np
 import pandas as pd
 
 from card_representation_conversion import convert_one_hot_to_card, convert_one_hot_to_vector, convert_card_to_vec
-from game.game import Game
-from game.game_state_machine import GameStateMachine
+from environment import Env
+
 from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
 from game.state.game_state_bid import DeclareGameVariantAction, PutDownSkatAction, BidCallAction, BidPassAction, \
     PickUpSkatAction
-from game.state.game_state_start import GameStateStart
 from game.state.game_state_play import PlayCardAction
 
 from model.player import Player
 from model.card import Card
 
-
-class Env:
-    def __init__(self):
-        # self.device = torch.device("cuda")
-        # Name the players with placeholders to recognize them during evaluation and debugging
-        self.player1 = Player(1, "Alice")
-        self.player2 = Player(2, "Bob")
-        self.player3 = Player(3, "Carol")
-        self.game = Game([self.player1, self.player2, self.player3])
-        self.state_machine = GameStateMachine(GameStateStart(self.game))
-        # self.state_machine.handle_action(StartGameAction())
-        self.action_space = 6
-        self.observation_space = 16
-
-    # def _get_state(self):
-    #     state =
-    #     return torch.tensor(state, dtype=torch.float32, device=self.device).div_(255)
-
-    def reset(self):
-        # return torch.stack(list(self.state_buffer), 0)
-        self.game.reset()
-
-    def step(self, card):
-        reward = 0
-
-        # pass action to the game state machine
-        self.state_machine.handle_action(PlayCardAction(player=self.player1, card=convert_one_hot_to_card(card)))
-
-        # update the reward, only the last points of the trick are relevant
-        reward += self.player1.current_trick_points
-
-        self.game.get_declarer()
-
-        state = self.player1.cards
-
-        # Return state, reward
-        return reward
-
-    # def train(self):
-    #     self.training = True
-    #
-    # def eval(self):
-    #     self.training = False
-
-
-# position co-player (1) + trump (4) + last trick (3 * act_dim) + open cards (2 * act_dim) + hand cards (12 * act_dim)
+# position co-player (3) + trump (4) + last trick (3 * act_dim) + open cards (2 * act_dim) + hand cards (12 * act_dim)
 state_dim = 92
 
 # card representation is a vector
@@ -101,7 +55,7 @@ def get_game(game="wc"):
     # GameID (0), PlayerFH (6), PlayerMH (7), PlayerRH (8), Card1 (9):Card30 (38), Card31 (39): Card32 (40) = Skat,
     # PlayerID (44), Game (45), Hand(48), PointsPlayer (54), Won (55), Miscall (56), AllPassed (58), Surrendered (59)
     # only needs cards of current player
-    colums = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 48, 54, 55, 56, 58, 59]
+    columns = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 48, 54, 55, 56, 58, 59]
 
     skat_game_data = pd.read_csv(skat_game_path, header=None)
 
@@ -117,7 +71,7 @@ def get_game(game="wc"):
                               "CardPointsPlayer", "AllPassed", "Surrendered", "PlayerPosAtTableFH",
                               "PlayerPosAtTableMH", "PlayerPosAtTableRH"]
 
-    skat_game_data = skat_game_data.iloc[:, colums]
+    skat_game_data = skat_game_data.iloc[:, columns]
 
     # if someone surrendered, the rest of the cards are in the cs data in their order
 
@@ -173,12 +127,12 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
     return game_state, actions, rewards
 
 
-def discount_cumsum(x, gamma):
-    discount_cumsum = np.zeros_like(x)
-    discount_cumsum[-1] = x[-1]
-    for t in reversed(range(len(x) - 1)):
-        discount_cumsum[t] = x[t] + gamma * discount_cumsum[t + 1]
-    return discount_cumsum
+# def discount_cumsum(x, gamma):
+#     discount_cumsum = np.zeros_like(x)
+#     discount_cumsum[-1] = x[-1]
+#     for t in reversed(range(len(x) - 1)):
+#         discount_cumsum[t] = x[t] + gamma * discount_cumsum[t + 1]
+#     return discount_cumsum
 
 
 def initialise_hand_cards(game, current_player, current_player2, current_player3, i):
@@ -205,7 +159,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
 
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
-    # -> pos_tp
+    # -> pos_p
     # -> hand_cards
 
     game_state_table = [[] * state_dim * 10] * amount_games * 3
@@ -279,13 +233,24 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # initialise Skat in the environment
             env.game.skat.extend([skat_up[0], skat_up[1]])
 
+            # encode the position of the players: 0 for self, 1 for team, -1 for opponent
+            pos_p = [0, 0, 0]
+
+            pos_p[i] = 0
+
             # initialise roles, encode positions and simulate bidding
             if agent_player == player_id:
+                # if the perspective of the agent is the soloist
 
-                # encode the position of the team partner: 0 for self, 1 for team, -1 for opponent
-                pos_tp = [-1, 0, -1]  # 0
+                # encode the position of the players: 0 for self, 1 for team, -1 for opponent
+                # pos_p = [-1, 0, -1]  # 0
                 # used to encode position of agent for game identification
-                agent_player = i
+                # agent_player = i
+
+                # pos_p[i] = 0
+                pos_p[(i + 1) % 3] = -1
+                pos_p[(i + 2) % 3] = -1
+
                 soloist = current_player
 
                 current_player.type = Player.Type.DECLARER
@@ -297,8 +262,13 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             else:
                 current_player.type = Player.Type.DEFENDER
                 if player_id == game[1 + (i + 1) % 3]:
-                    pos_tp = [1, 0, -1]  # 2
-                    agent_player = (i + 1) % 3
+                    # pos_p = [1, 0, -1]  # 2
+                    # agent_player = (i + 1) % 3
+
+                    # pos_p[i] = 0
+                    pos_p[(i + 1) % 3] = -1
+                    pos_p[(i + 2) % 3] = 1
+
                     soloist = current_player2
 
                     current_player2.type = Player.Type.DECLARER
@@ -307,8 +277,13 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     env.state_machine.handle_action(BidPassAction(current_player, 18))
                     env.state_machine.handle_action(BidPassAction(current_player3, 18))
                 else:
-                    pos_tp = [-1, 0, 1]  # 1
-                    agent_player = (i + 2) % 3
+                    # pos_p = [-1, 0, 1]  # 1
+                    # agent_player = (i + 2) % 3
+
+                    # pos_p[i] = 0
+                    pos_p[(i + 1) % 3] = 1
+                    pos_p[(i + 2) % 3] = -1
+
                     soloist = current_player3
 
                     current_player3.type = Player.Type.DECLARER
@@ -336,8 +311,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     hand_cards.extend([[0] * act_dim, [0] * act_dim])
 
                 # ...in the game state
-                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                            # dtype=np.int8,
+                game_state = np.concatenate([pos_p, trump_enc, last_trick, open_cards, hand_cards],
                                             axis=None)
 
                 # ...in the environment
@@ -349,8 +323,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 # pad the current cards to a length of 12
                 hand_cards.extend([[0] * act_dim, [0] * act_dim])
 
-                game_state = np.concatenate([pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                            # dtype=np.int8,
+                game_state = np.concatenate([pos_p, trump_enc, last_trick, open_cards, hand_cards],
                                             axis=None)
 
             # ...put down Skat in the data (s, a, r)
@@ -360,8 +333,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 # the last trick is the put Skat and padding in the beginning TODO: uniform padding and
                 last_trick = [convert_one_hot_to_vector(skat_and_cs[cs_index, 0]), [0] * act_dim, [0] * act_dim]
 
-                game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                            # dtype=np.int8,
+                game_state = np.concatenate([game_state, pos_p, trump_enc, last_trick, open_cards, hand_cards],
                                             axis=None)
 
                 # the last trick is the put Skat and padding in the beginning
@@ -383,11 +355,8 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 rewards.extend([0, 0])
                 last_trick = [[0] * act_dim, [0] * act_dim, [0] * act_dim]
 
-                game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                            # dtype=np.int8,
+                game_state = np.concatenate([game_state, pos_p, trump_enc, last_trick, open_cards, hand_cards],
                                             axis=None)
-
-            # TODO: uniform padding with 0 -> cards from 1-32
 
             # declare the game variant, TODO: implement null rewards
             if trump == 0 or trump == 35 or trump == 46 or trump == 59:
@@ -421,8 +390,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                         # pad the cards to a length of 12
                         hand_cards = [act_dim * [0]] * (trick + 1) + hand_cards
 
-                        game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                                    # dtype=np.int8,
+                        game_state = np.concatenate([game_state, pos_p, trump_enc, last_trick, open_cards, hand_cards],
                                                     axis=None)
 
                         actions.append(convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick - 1]))
@@ -442,8 +410,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                         # pad the cards to a length of 12
                         hand_cards = [act_dim * [0]] * (trick + 1) + hand_cards
 
-                        game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                                    # dtype=np.int8,
+                        game_state = np.concatenate([game_state, pos_p, trump_enc, last_trick, open_cards, hand_cards],
                                                     axis=None)
 
                         actions.append(convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick]))
@@ -464,8 +431,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                         # pad the cards to a length of 12
                         hand_cards = [act_dim * [0]] * (trick + 1) + hand_cards
 
-                        game_state = np.concatenate([game_state, pos_tp, trump_enc, last_trick, open_cards, hand_cards],
-                                                    # dtype=np.int8,
+                        game_state = np.concatenate([game_state, pos_p, trump_enc, last_trick, open_cards, hand_cards],
                                                     axis=None)
 
                         actions.append(convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick + 1]))
@@ -499,7 +465,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
 
                 # if hand is played, adding the Skat points in the end of the game simulates not knowing them
                 if hand:
-                    if pos_tp == 0:
+                    if pos_p == 0:
                         rewards[-1] += (skat_up[0].get_value()
                                         + skat_up[1].get_value())
                     else:
@@ -511,13 +477,13 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 # if point_rewards add card points on top of achieved points...
                 if current_player.type == Player.Type.DECLARER:
                     # add the points to the soloist (soloist points can be negative)
-                    rewards[-1] += soloist_points
+                    rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
                 else:
                     # subtract the game points (soloist points can be negative)
-                    rewards[-1] -= soloist_points
+                    rewards[-1] -= 0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
             else:
-                # ...otherwise, give a negative reward for lost and a positive reward for won games
-                rewards[-1] *= 1 if won else -1
+                # ...otherwise, give a 0 reward for lost and a positive reward for won games
+                rewards[-1] *= 1 if won else 0
 
             # in the end of each game, insert the states, actions and rewards
             # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
@@ -543,9 +509,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
         # "timesteps": timesteps_table,
         # "attention_mask": mask_table,
     }
-
-
-# the dataset is already tokenized in the database
 
 
 TARGET_RETURN = 61

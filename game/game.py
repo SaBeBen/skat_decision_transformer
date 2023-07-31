@@ -1,4 +1,5 @@
-from model import card
+import pylab as p
+
 from model.card import Card
 from model.player import Player
 
@@ -18,24 +19,25 @@ class Game:
 
         self.trick = Trick([self.get_first_seat(), self.get_second_seat(), self.get_third_seat()])
         self.trick.leader = self.get_first_seat()
+        self.last_trick_cards = None
 
-        # self.create_deck()
+        self.create_deck()
 
     def finish_trick(self):
         trick_winner, current_trick_points = self.trick.get_winner(self.game_variant)
+        self.last_trick_cards = self.trick.get_open_cards()
 
-        # TODO: play with the reward settings
         # update current trick points: the party winning this trick get a reward of the points
         if trick_winner is self.get_declarer():
             trick_winner.current_trick_points = current_trick_points
             for player in self.players:
                 if player is not trick_winner:
-                    # both players of the counter party receive a negative reward
+                    # both players of the counterparty receive a negative reward
                     player.current_trick_points = -current_trick_points
         else:
             for player in self.players:
                 if player is not self.get_declarer():
-                    # both players of the counter party receive the reward
+                    # both players of the counterparty receive the reward
                     player.current_trick_points = current_trick_points
                 else:
                     # the declarer receives a negative reward
@@ -43,7 +45,6 @@ class Game:
 
         # add trick to players trick_stack
         trick_winner.trick_stack[self.round] = self.trick.stack
-        # trick_winner.cardPoints += self.trick.stack
 
         # new trick
         idx_leader = self.players.index(trick_winner)
@@ -53,7 +54,6 @@ class Game:
         # set trick leader for next round
         self.trick.leader = trick_winner
 
-    # TODO: surrender
 
     def get_dealer(self):
         return self.players[self.dealer]
@@ -95,6 +95,37 @@ class Game:
 
         if with_dealer:
             self.dealer = -1
+
+    def get_last_trick_cards(self):
+        return self.last_trick_cards
+
+    def get_round(self):
+        return self.round
+
+    def surrender(self, current_player):
+        # calculate the remaining card points of the game
+        remaining_points = (120 - sum([player.sum_trick_values() for player in self.players]))
+
+        if current_player is Player.Type.DECLARER:
+            # if the declarer surrenders...
+            # ...the declarer receives no reward...
+            current_player.current_trick_points = 0
+
+            # ...and the points are given to the defenders
+            for player in self.players:
+                if player is not current_player:
+                    # both players of the counterparty receive the reward
+                    player.current_trick_points += remaining_points
+        else:
+            # if the defenders surrender...
+            # ...the declarer receives the rest of the card points as a reward
+            current_player.current_trick_points += remaining_points
+
+            # ...and the defenders receive no reward
+            for player in self.players:
+                if player is not current_player:
+                    # both players of the counterparty receive the reward
+                    player.current_trick_points = 0
 
 
 class Trick:
@@ -165,3 +196,6 @@ class Trick:
 
     def is_complete(self):
         return len(self.stack) == 3
+
+    def get_open_cards(self):
+        return [entry[1] for entry in self.stack]

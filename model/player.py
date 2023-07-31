@@ -42,6 +42,9 @@ class Player:
     def set_cards(self, cards):
         self.cards = cards
 
+    def get_id(self):
+        return self.id
+
     def __repr__(self):
         return "id=" + str(id) + "name=" + self.name + " cards=" + str(self.cards)
 

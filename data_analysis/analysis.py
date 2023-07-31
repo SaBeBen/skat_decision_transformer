@@ -114,24 +114,6 @@ game_data.columns = ["GameID", "IDGame", "IDTable", "IDVServer", "StartTime", "E
 head = game_data.head(n=20)
 print(head)
 
-# %%
-print(game_data.iloc[1, 0:2])
-
-print(game_data.iloc[1, 9:41])
-
-print(game_data.iloc[1, 59:60])
-
-# %%
-colums = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 55, 56, 58, 59]
-
-game_data_np = np.asarray(np.loadtxt(game_path, delimiter=",", dtype=int,
-                                             usecols=colums))
-
-# %%
-cs_data_np = np.asarray(np.loadtxt(cs_data_path, delimiter=",", dtype=int))
-
-skat_and_cs_np = cs_data_np[:, 1:33]
-
 # %% Sanity Checks
 
 game_data[["CallValueFH", "CallValueMH", "CallValueRH", "PlayerID", "Game",
@@ -206,7 +188,7 @@ game_variants = game_variants.drop(labels=["Null Ouvert", "Null Hand", "Null Ouv
 
 # Create a pie plot showing the relative occurrence of game variants in all games
 game_variants.plot(kind="pie", y="Game", autopct='%1.0f%%')
-plt.savefig("graphics/all_games_pie_wc.png")
+plt.savefig(f"graphics/all_games_pie_{championship}.png")
 plt.show()
 
 # %%
@@ -259,7 +241,7 @@ game_variants_lost
 comp_won_lost = pd.DataFrame({"won": game_variants_won,
                               "lost": game_variants_lost})
 comp_won_lost.plot.barh()
-plt.savefig("graphics/comp_won_lost_wc.png")
+plt.savefig(f"graphics/comp_won_lost_{championship}.png")
 plt.show()
 # %%
 
@@ -269,7 +251,7 @@ game_variants_won = game_variants_won.drop(labels=["Null Ouvert", "Null Hand", "
 
 # Create a pie plot showing the relative occurrence of game variants in won games
 game_variants_won.plot(kind="pie", y="Game", autopct='%1.0f%%')
-plt.savefig("graphics/won_games_pie_wc.png")
+plt.savefig(f"graphics/won_games_pie_{championship}.png")
 plt.show()
 
 # %%

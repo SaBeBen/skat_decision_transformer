@@ -67,11 +67,17 @@ player3.cards = [Card(Card.Suit.SPADE, Card.Face.JACK), Card(Card.Suit.CLUB, Car
 player1.cards = [Card(Card.Suit.CLUB, Card.Face.JACK), Card(Card.Suit.CLUB, Card.Face.KING), Card(Card.Suit.DIAMOND, Card.Face.SEVEN), Card(Card.Suit.SPADE, Card.Face.SEVEN), Card(Card.Suit.SPADE, Card.Face.EIGHT), Card(Card.Suit.HEARTS, Card.Face.EIGHT), Card(Card.Suit.HEARTS, Card.Face.KING), Card(Card.Suit.SPADE, Card.Face.KING), Card(Card.Suit.CLUB, Card.Face.SEVEN), Card(Card.Suit.CLUB, Card.Face.QUEEN)]
 player2.cards = [Card(Card.Suit.DIAMOND, Card.Face.JACK), Card(Card.Suit.CLUB, Card.Face.ACE), Card(Card.Suit.DIAMOND, Card.Face.TEN), Card(Card.Suit.HEARTS, Card.Face.SEVEN), Card(Card.Suit.SPADE, Card.Face.QUEEN), Card(Card.Suit.HEARTS, Card.Face.NINE), Card(Card.Suit.HEARTS, Card.Face.QUEEN), Card(Card.Suit.SPADE, Card.Face.NINE), Card(Card.Suit.DIAMOND, Card.Face.QUEEN), Card(Card.Suit.DIAMOND, Card.Face.NINE)]
 
+print(f"Open cards: {game.trick.get_open_cards()}")
+
 # trick 1
 print("\nTrick " + str(game.round) + ":")
 state_machine.handle_action(PlayCardAction(player3, Card(Card.Suit.SPADE, Card.Face.JACK)))
+print(f"Open cards: {game.trick.get_open_cards()}")
 state_machine.handle_action(PlayCardAction(player1, Card(Card.Suit.CLUB, Card.Face.JACK)))
 state_machine.handle_action(PlayCardAction(player2, Card(Card.Suit.DIAMOND, Card.Face.JACK)))
+print(f"Last trick cards: {game.get_last_trick_cards()}")
+print(f"Open cards: {game.trick.get_open_cards()}")
+
 
 # trick 2
 print("\nTrick " + str(game.round) + ":")

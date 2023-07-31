@@ -22,6 +22,10 @@ class GameVariant(metaclass=ABCMeta):
     def has_trump(self, player):
         raise NotImplementedError()
 
+    @abstractmethod
+    def get_trump(self):
+        raise NotImplementedError()
+
     def get_highest_card(self, cards):
         highest_card = None
         for card in cards:
@@ -74,6 +78,9 @@ class GameVariantGrand(GameVariant):
     def has_trump(self, player):
         return player.has_face(Card.Face.JACK)
 
+    def get_trump(self):
+        return 24
+
 
 # ------------------------------------------------------------
 # Concrete game variant class for suit game
@@ -95,6 +102,9 @@ class GameVariantSuit(GameVariantGrand):
 
     def has_trump(self, player):
         return player.has_face(Card.Face.JACK) or player.has_suit(self.trump_suit)
+
+    def get_trump(self):
+        return self.trump_suit.value + 9
 
 
 # ------------------------------------------------------------
@@ -122,3 +132,6 @@ class GameVariantNull(GameVariant):
 
     def has_trump(self, player):
         return False
+
+    def get_trump(self):
+        return 0

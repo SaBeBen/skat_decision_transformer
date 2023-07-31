@@ -15,6 +15,8 @@ class GameStatePlay(GameState):
     def handle_action(self, action):
         if isinstance(action, PlayCardAction):
             self.play_card(action.player, action.card)
+        elif isinstance(action, SurrenderAction):
+            self.surrender(action.player)
         else:
             super().handle_action(action)
 
@@ -64,6 +66,10 @@ class GameStatePlay(GameState):
 
         self.handle_state_finished()
 
+    def surrender(self, player):
+        self.game.surrender(player)
+        self.finish_game()
+
     def get_next_state(self):
         return GameStateEnd(self.game)
 
@@ -75,3 +81,10 @@ class PlayCardAction(PlayerAction):
     def __init__(self, player, card):
         super().__init__(player)
         self.card = card
+
+
+class SurrenderAction:
+    def __init__(self, player):
+        super().__init__(player)
+        self.player = player
+

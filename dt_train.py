@@ -5,20 +5,25 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig, \
-    DefaultDataCollator
+    DefaultDataCollator, BertTokenizer
 # %%
-import decision_transformer
+import data_pipeline
 
 from datasets import Dataset, DatasetDict
 
 # %%
-dataset = decision_transformer.get_states_actions_rewards(amount_games=10)
+dataset = decision_transformer.get_states_actions_rewards(amount_games=10,
+                                                          # point_rewards=True
+                                                          )
 
 # %%
 dataset = DatasetDict({"train": Dataset.from_dict(dataset)})
 
 # %%
 from transformers import DataCollatorWithPadding
+
+state_dim = 92
+act_dim = 5
 
 
 # from datasets import load_dataset
@@ -33,7 +38,7 @@ def get_batch_ind():  # game_length
     # this picks the same game over *times* times
     # (WC GameID 4)
     times = 100
-    return np.tile(np.arange(6, 7), times)
+    return np.tile(np.arange(8, 9), times)
 
     # return np.random.choice(
     #     np.arange(n_traj),
@@ -47,12 +52,11 @@ def get_batch_ind():  # game_length
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"
-    max_len: int = 12  # 13 subsets of the episode we use for training, our episode length is short
-    # -> computationally cheap
-    state_dim: int = 22  # 22 size of state space
-    act_dim: int = 1  # 1 size of action space
-    max_ep_len: int = 12  # 13 max episode length in the dataset
-    scale: float = 12.0  # 13.0 normalization of rewards/returns
+    max_len: int = 3  # subsets of the episode we use for training, our episode length is short
+    state_dim: int = state_dim  # size of state space
+    act_dim: int = act_dim  # size of action space
+    max_ep_len: int = 12  # max episode length in the dataset
+    scale: float = 12.0  # normalization of rewards/returns
     state_mean: np.array = None  # to store state means
     state_std: np.array = None  # to store state stds
     p_sample: np.array = None  # a distribution to take account trajectory lengths
@@ -76,6 +80,7 @@ class DecisionTransformerSkatDataCollator:
         self.p_sample = traj_lens / sum(traj_lens)
 
     def _discount_cumsum(self, x, gamma):
+        # TODO: apply weighted reward
         discount_cumsum = np.zeros_like(x)
         discount_cumsum[-1] = x[-1]
         for t in reversed(range(x.shape[0] - 1)):
@@ -90,8 +95,6 @@ class DecisionTransformerSkatDataCollator:
         # TODO: rtg, timesteps and mask v
         # TODO: scale rewards
         # Done: find a suit game which is easily won v
-
-        # We don't need "train" and test within the dataset
 
         batch_inds = get_batch_ind()  # self.state_dim * self.max_ep_len
 
@@ -115,20 +118,19 @@ class DecisionTransformerSkatDataCollator:
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
             # TODO: jumping randomly into a surrendered game does not work well
-            si = 0  # random.randint(0, len(feature["rewards"]) - 1)  # feature[]
+            si = random.randint(0, len(feature["rewards"]) - 1)  # 0
 
             # get sequences from dataset
-            s.append(np.array(feature["states"]  # feature[]
+            s.append(np.array(feature["states"]
                               [si: self.max_len]).reshape((1, -1, self.state_dim)))
-            a.append(np.array(feature["actions"][si:self.max_len]).reshape((1, -1, self.act_dim)))  # feature[]
-            r.append(np.array(feature["rewards"][si:self.max_len]).reshape((1, -1, 1)))  # feature[]
+            a.append(np.array(feature["actions"][si:self.max_len]).reshape((1, -1, self.act_dim)))
+            r.append(np.array(feature["rewards"][si:self.max_len]).reshape((1, -1, 1)))
 
-            timesteps.append(np.arange(si, si + s[-1].shape[1]).reshape(1, -1))  # s[-1].shape[1]
+            timesteps.append(np.arange(si, si + s[-1].shape[1]).reshape(1, -1))
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
-                self._discount_cumsum(np.array(feature["rewards"][si:]), gamma=1.0)[
-                : s[-1].shape[1]  # TODO check the +1 removed here
-                ].reshape(1, -1, 1)
+                self._discount_cumsum(np.array(feature["rewards"][si:]), gamma=1.0)[: s[-1].shape[1]
+                ].reshape(1, -1, 1)  # TODO check the +1 removed here
             )
             if rtg[-1].shape[1] < s[-1].shape[1]:
                 print("if true")
@@ -146,7 +148,7 @@ class DecisionTransformerSkatDataCollator:
             # s[-1] = (s[-1] - self.state_mean) / self.state_std
 
             a[-1] = np.concatenate(
-                [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
+                [np.zeros((1, self.max_len - tlen, self.act_dim)), a[-1]],  # * -10.0
                 axis=1,
             )
             r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
@@ -204,7 +206,7 @@ class TrainableDT(DecisionTransformerModel):
 training_args = TrainingArguments(
     output_dir="output/",
     remove_unused_columns=False,
-    num_train_epochs=360,
+    num_train_epochs=120,
     per_device_train_batch_size=64,
     learning_rate=1e-4,
     weight_decay=1e-4,
@@ -216,16 +218,19 @@ training_args = TrainingArguments(
 # collator = DecisionTransformerSkatDataCollator(dataset)
 # collator = DefaultDataCollator()
 
-configuration = DecisionTransformerConfig(state_dim=92,  # each state consist out of 22 numbers
-                                          act_dim=5,  # each action consists out of one played card ()
+configuration = DecisionTransformerConfig(state_dim=state_dim,  # each state consist out of
+                                          act_dim=act_dim,  # each action consists out of one played card ()
                                           max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
                                           vocab_size=35,  # there are 32 cards + pos_tp + trump + surrender
                                           # TODO: other encodings (like pos_tp)?
                                           )
+# TODO: how is the vocabulary defined?
 
 # model = DecisionTransformerModel(configuration)
 
 collator = DecisionTransformerSkatDataCollator(dataset["train"])
+
+# tokenizer = BertTokenizer()
 
 config = DecisionTransformerConfig(state_dim=collator.state_dim, act_dim=collator.act_dim)
 model = TrainableDT(config)
@@ -238,4 +243,108 @@ trainer = Trainer(
     data_collator=collator,
 )
 
+# We could train our tokenizer right now, but it wouldn’t be optimal.
+# Without a pre-tokenizer that will split our inputs into cards and other encodings like pos_tp, trump, surrender
+# we might get tokens that overlap several words
+
+
 trainer.train()
+
+# TODO: evaluation, reset env
+
+# select available cudas for faster matrix computation
+device = torch.device("cuda")
+
+TARGET_RETURN = 61
+
+# evaluation
+# model = model.to(device)
+model.eval()
+
+env = decision_transformer.Env()
+
+
+# Function that gets an action from the model using autoregressive prediction
+# with a window of the previous 20 timesteps.
+def get_action(model, states, actions, rewards, returns_to_go, timesteps):
+    # This implementation does not condition on past rewards
+
+    states = states.reshape(1, -1, model.config.state_dim)
+    actions = actions.reshape(1, -1, model.config.act_dim)
+    returns_to_go = returns_to_go.reshape(1, -1, 1)
+    timesteps = timesteps.reshape(1, -1)
+
+    # The prediction is conditioned on up to 20 previous time-steps
+    states = states[:, -model.config.max_length:]
+    actions = actions[:, -model.config.max_length:]
+    returns_to_go = returns_to_go[:, -model.config.max_length:]
+    timesteps = timesteps[:, -model.config.max_length:]
+
+    # pad all tokens to sequence length, this is required if we process batches
+    padding = model.config.max_length - states.shape[1]
+    attention_mask = torch.cat([torch.zeros(padding), torch.ones(states.shape[1])])
+    attention_mask = attention_mask.to(dtype=torch.long).reshape(1, -1)
+    states = torch.cat([torch.zeros((1, padding, state_dim)), states], dim=1).float()
+    actions = torch.cat([torch.zeros((1, padding, act_dim)), actions], dim=1).float()
+    returns_to_go = torch.cat([torch.zeros((1, padding, 1)), returns_to_go], dim=1).float()
+    timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
+
+    # perform the prediction
+    state_preds, action_preds, return_preds = model(
+        states=states,
+        actions=actions,
+        rewards=rewards,
+        returns_to_go=returns_to_go,
+        timesteps=timesteps,
+        attention_mask=attention_mask,
+        return_dict=False, )
+    return action_preds[0, -1]
+
+
+# This was normalized during training
+MAX_EPISODE_LENGTH = 12
+scale = 1
+
+# state_mean = np.array()
+# state_std = np.array()
+#
+# state_mean = torch.from_numpy(state_mean)
+# state_std = torch.from_numpy(state_std)
+
+# build the environment for the evaluation
+state = env.reset()  # TODO
+target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
+states = torch.from_numpy(state).reshape(1, state_dim).float()
+actions = torch.zeros((0, act_dim)).float()
+rewards = torch.zeros(0).float()
+timesteps = torch.tensor(0).reshape(1, 1).long()
+
+# take steps in the environment (evaluation, not training)
+for t in range(MAX_EPISODE_LENGTH):
+    # add zeros for actions as input for the current time-step
+    actions = torch.cat([actions, torch.zeros((1, act_dim))], dim=0)
+    rewards = torch.cat([rewards, torch.zeros(1)])
+
+    # predicting the action to take
+    action = get_action(model,
+                        states,  # - state_mean) / state_std,
+                        actions,
+                        rewards,
+                        target_return,
+                        timesteps)
+    actions[-1] = action
+    action = action.detach().numpy()
+
+    # interact with the environment based on this action
+    state, reward, done, _ = env.step(action, env.player1)  # TODO
+
+    cur_state = torch.from_numpy(state).reshape(1, state_dim)
+    states = torch.cat([states, cur_state], dim=0)
+    rewards[-1] = reward
+
+    pred_return = target_return[0, -1] - (reward / scale)
+    target_return = torch.cat([target_return, pred_return.reshape(1, 1)], dim=1)
+    timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
+
+    if done:
+        break
