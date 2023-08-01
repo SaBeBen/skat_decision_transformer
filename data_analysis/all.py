@@ -17,7 +17,7 @@ columns = ["GameID", "IDGame", "IDTable", "IDVServer", "StartTime", "EndTime", "
 # %%
 # Read gtc data set
 gtc_game_data_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-                     f"db_app/data/gtc_game.CSV"
+                     f"data/gtc_game.CSV"
 
 gtc_game_data = pd.read_csv(gtc_game_data_path, header=None)
 
@@ -25,7 +25,7 @@ gtc_game_data.columns = columns
 
 # Read rc data set
 rc_game_data_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-                    f"db_app/data/rc_game.CSV"
+                    f"data/rc_game.CSV"
 
 rc_game_data = pd.read_csv(rc_game_data_path, header=None)
 
@@ -33,7 +33,7 @@ rc_game_data.columns = columns
 
 # Read wc data set
 wc_game_data_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-                    f"db_app/data/wc_game.CSV"
+                    f"data/wc_game.CSV"
 
 wc_game_data = pd.read_csv(wc_game_data_path, header=None)
 
@@ -41,7 +41,7 @@ wc_game_data.columns = columns
 
 # Read gc data set
 gc_game_data_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-                    f"db_app/data/gc_game.CSV"
+                    f"data/gc_game.CSV"
 
 gc_game_data = pd.read_csv(gc_game_data_path, header=None)
 
@@ -49,7 +49,7 @@ gc_game_data.columns = columns
 
 # Read bl data set
 bl_game_data_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-                    f"db_app/data/bl_game.CSV"
+                    f"data/bl_game.CSV"
 
 bl_game_data = pd.read_csv(bl_game_data_path, header=None)
 

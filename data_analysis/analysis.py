@@ -13,7 +13,7 @@ championships = ["wc", "bl", "gc", "gtc", "rc"]
 championship = "wc"
 
 cs_data_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-               f"db_app/data/{championship}_card_sequence.CSV"
+               f"data/{championship}_card_sequence.CSV"
 
 cs_data = pd.read_csv(cs_data_path, header=None)
 
@@ -61,7 +61,7 @@ print(head)
 
 """The table dataset follows"""
 table_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-               f"db_app/data/{championship}_table.CSV"
+               f"data/{championship}_table.CSV"
 
 table_data = pd.read_csv(table_path, header=None)
 
@@ -94,7 +94,7 @@ print(head)
 """The game dataset follows"""
 
 game_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-               f"db_app/data/{championship}_game.CSV"
+               f"data/{championship}_game.CSV"
 
 game_data = pd.read_csv(game_path, header=None)
 

@@ -12,6 +12,7 @@ from model.card import Card
 
 from model.player import Player
 
+
 # position co-player (3) + trump (4) + last trick (3 * act_dim) + open cards (2 * act_dim) + hand cards (12 * act_dim)
 state_dim = 92
 

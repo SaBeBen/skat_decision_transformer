@@ -2,6 +2,7 @@ from math import floor
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from card_representation_conversion import convert_one_hot_to_card, convert_one_hot_to_vector, convert_card_to_vec
 from environment import Env, get_trump
@@ -20,15 +21,16 @@ state_dim = 92
 # card representation is a vector
 act_dim = 5
 
+
 def get_game(game="wc"):
     possible_championships = ["wc", "gc", "gtc", "bl", "rc"]
 
     if game not in possible_championships:
         raise ValueError(f"The championship {game} does not exist in the database.")
 
-    skat_cs_path = f"db_app/data/{game}_card_sequence.CSV"
+    skat_cs_path = f"data/{game}_card_sequence.CSV"
 
-    skat_game_path = f"db_app/data/{game}_game.CSV"
+    skat_game_path = f"data/{game}_game.CSV"
 
     skat_cs_data = pd.read_csv(skat_cs_path, header=None)
 
@@ -115,14 +117,6 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
     return game_state, actions, rewards
 
 
-# def discount_cumsum(x, gamma):
-#     discount_cumsum = np.zeros_like(x)
-#     discount_cumsum[-1] = x[-1]
-#     for t in reversed(range(len(x) - 1)):
-#         discount_cumsum[t] = x[t] + gamma * discount_cumsum[t + 1]
-#     return discount_cumsum
-
-
 def initialise_hand_cards(game, current_player, current_player2, current_player3, i):
     # TODO: access the player card with fast search, for instance binary search
     # ...instead, initialise the hand cards
@@ -169,7 +163,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
     # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0
 
-    for game in meta_and_cards[:amount_games, :]:
+    for game in tqdm(meta_and_cards[:amount_games, :]):
 
         for i in range(3):
             # print(f"Player {i} is currently transferred")
@@ -318,7 +312,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # each Skat card needs its own action (due to act_dim)
             if current_player.type == Player.Type.DECLARER and not hand:
 
-                # the last trick is the put Skat and padding in the beginning TODO: uniform padding and
+                # the last trick is the put Skat and padding in the beginning
                 last_trick = [convert_one_hot_to_vector(skat_and_cs[cs_index, 0]), [0] * act_dim, [0] * act_dim]
 
                 game_state = np.concatenate([game_state, pos_p, trump_enc, last_trick, open_cards, hand_cards],
@@ -497,148 +491,3 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
         # "timesteps": timesteps_table,
         # "attention_mask": mask_table,
     }
-
-
-# --------------------------------------------------------------------------------------------------------------------
-# from https://huggingface.co/blog/train-decision-transformers
-#
-# # select available cudas for faster matrix computation
-# device = torch.device("cuda")
-#
-# # one could use pretrained, but in our case we need our own model
-# configuration = DecisionTransformerConfig(state_dim=state_dim, act_dim=act_dim)
-# model = DecisionTransformerModel(configuration)
-#
-# training_args = TrainingArguments(
-#     output_dir="training_output",
-#     learning_rate=2e-5,
-#     per_device_train_batch_size=8,
-#     per_device_eval_batch_size=8,
-#     num_train_epochs=2,
-# )
-#
-# # split dataset into train and test
-# skat_train, skat_test = train_test_split([], test_size=0.2, random_state=0)
-#
-# trainer = Trainer(
-#     model=model,
-#     args=training_args,
-#     train_dataset=skat_train,
-#     eval_dataset=skat_test,
-# )  # doctest: +SKIP
-#
-# trainer.train()
-#
-# # ----------------------------------------------------------------------------------------
-#
-# # evaluation
-# model = model.to(device)
-# model.eval()
-#
-# env = Env(device)
-#
-#
-# # Function that gets an action from the model using autoregressive prediction
-# # with a window of the previous 20 timesteps.
-# def get_action(model, states, actions, rewards, returns_to_go, timesteps):
-#     # This implementation does not condition on past rewards
-#
-#     states = states.reshape(1, -1, model.config.state_dim)
-#     actions = actions.reshape(1, -1, model.config.act_dim)
-#     returns_to_go = returns_to_go.reshape(1, -1, 1)
-#     timesteps = timesteps.reshape(1, -1)
-#
-#     # The prediction is conditioned on up to 20 previous time-steps
-#     states = states[:, -model.config.max_length:]
-#     actions = actions[:, -model.config.max_length:]
-#     returns_to_go = returns_to_go[:, -model.config.max_length:]
-#     timesteps = timesteps[:, -model.config.max_length:]
-#
-#     # pad all tokens to sequence length, this is required if we process batches
-#     padding = model.config.max_length - states.shape[1]
-#     attention_mask = torch.cat([torch.zeros(padding), torch.ones(states.shape[1])])
-#     attention_mask = attention_mask.to(dtype=torch.long).reshape(1, -1)
-#     states = torch.cat([torch.zeros((1, padding, state_dim)), states], dim=1).float()
-#     actions = torch.cat([torch.zeros((1, padding, act_dim)), actions], dim=1).float()
-#     returns_to_go = torch.cat([torch.zeros((1, padding, 1)), returns_to_go], dim=1).float()
-#     timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
-#
-#     # perform the prediction
-#     state_preds, action_preds, return_preds = model(
-#         states=states,
-#         actions=actions,
-#         rewards=rewards,
-#         returns_to_go=returns_to_go,
-#         timesteps=timesteps,
-#         attention_mask=attention_mask,
-#         return_dict=False, )
-#     return action_preds[0, -1]
-#
-#
-# # This was normalized during training
-# MAX_EPISODE_LENGTH = 1000
-# scale = 1
-#
-# # state_mean = np.array()
-# # state_std = np.array()
-# #
-# # state_mean = torch.from_numpy(state_mean)
-# # state_std = torch.from_numpy(state_std)
-#
-# # build the environment for the evaluation
-# state = env.reset()  # TODO
-# target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
-# states = torch.from_numpy(state).reshape(1, state_dim).float()
-# actions = torch.zeros((0, act_dim)).float()
-# rewards = torch.zeros(0).float()
-# timesteps = torch.tensor(0).reshape(1, 1).long()
-#
-# # take steps in the environment (evaluation, not training)
-# for t in range(MAX_EPISODE_LENGTH):
-#     # add zeros for actions as input for the current time-step
-#     actions = torch.cat([actions, torch.zeros((1, act_dim))], dim=0)
-#     rewards = torch.cat([rewards, torch.zeros(1)])
-#
-#     # predicting the action to take
-#     action = get_action(model,
-#                         states,  # - state_mean) / state_std,
-#                         actions,
-#                         rewards,
-#                         target_return,
-#                         timesteps)
-#     actions[-1] = action
-#     action = action.detach().numpy()
-#
-#     # interact with the environment based on this action
-#     state, reward, done, _ = env.step(action)  # TODO
-#
-#     cur_state = torch.from_numpy(state).reshape(1, state_dim)
-#     states = torch.cat([states, cur_state], dim=0)
-#     rewards[-1] = reward
-#
-#     pred_return = target_return[0, -1] - (reward / scale)
-#     target_return = torch.cat([target_return, pred_return.reshape(1, 1)], dim=1)
-#     timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
-#
-#     if done:
-#         break
-#
-# # state = env.reset()
-# # states = torch.from_numpy(state).reshape(1, 1, state_dim).to(device=device, dtype=torch.float32)
-# # actions = torch.zeros((1, 1, act_dim), device=device, dtype=torch.float32)
-# # rewards = torch.zeros(1, 1, device=device, dtype=torch.float32)
-# # target_return = torch.tensor(TARGET_RETURN, dtype=torch.float32).reshape(1, 1)
-# # timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
-# # attention_mask = torch.zeros(1, 1, device=device, dtype=torch.float32)
-# #
-# # # forward pass
-# # with torch.no_grad():
-# #     state_preds, action_preds, return_preds = model(
-# #         states=states,
-# #         actions=actions,
-# #         rewards=rewards,
-# #         returns_to_go=target_return,
-# #         timesteps=timesteps,
-# #         attention_mask=attention_mask,
-# #         return_dict=False,
-# #     )

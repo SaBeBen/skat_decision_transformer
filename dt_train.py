@@ -1,17 +1,11 @@
 import random
 from dataclasses import dataclass
-
 import numpy as np
 import torch
-from tqdm import tqdm
-from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
-from transformers.models import decision_transformer
-
-# %%
-import data_pipeline
-
 from datasets import Dataset, DatasetDict
 
+from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
+import data_pipeline
 import environment
 
 # %%
@@ -23,18 +17,11 @@ dataset = data_pipeline.get_states_actions_rewards(amount_games=10,
 dataset = DatasetDict({"train": Dataset.from_dict(dataset)})
 
 # %%
-from transformers import DataCollatorWithPadding
 
 state_dim = 92
 act_dim = 5
-device = torch.device("cuda")
+# device = torch.device("cuda") # "cpu"
 
-# from datasets import load_dataset
-
-# dataset = load_dataset("edbeeching/decision_transformer_gym_replay", "halfcheetah-expert-v2")
-
-
-# TODO: tqdm for progress bar
 
 def get_batch_ind():  # game_length
     # picks game indices
@@ -47,7 +34,7 @@ def get_batch_ind():  # game_length
     #     np.arange(n_traj),
     #     size=batch_size,
     #     replace=True,
-    #     p=p_sample,  # reweights so we sample according to timesteps
+    #     p=p_sample,  # reweights, so we sample according to timesteps
     # )
 
 
@@ -93,10 +80,10 @@ class DecisionTransformerSkatDataCollator:
     def __call__(self, features):
         batch_size = len(features)
 
-        # TODO: We want one game as a whole in a batch v
+        # Done: We want one game as a whole in a batch v
         # Done: normalization v
-        # TODO: rtg, timesteps and mask v
-        # TODO: scale rewards
+        # Done: rtg, timesteps and mask v
+        # Done: scale rewards
         # Done: find a suit game which is easily won v
 
         batch_inds = get_batch_ind()  # self.state_dim * self.max_ep_len
@@ -148,7 +135,7 @@ class DecisionTransformerSkatDataCollator:
             s[-1] = np.concatenate([padding, s[-1]], axis=1)
 
             # state normalization
-            # s[-1] = (s[-1] - self.state_mean) / self.state_std
+            s[-1] = (s[-1] - self.state_mean) / self.state_std
 
             a[-1] = np.concatenate(
                 [np.zeros((1, self.max_len - tlen, self.act_dim)), a[-1]],  # * -10.0
@@ -156,7 +143,7 @@ class DecisionTransformerSkatDataCollator:
             )
             r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
 
-            rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1) #/ self.scale
+            rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1)  # / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
 
@@ -192,6 +179,7 @@ class TrainableDT(DecisionTransformerModel):
         action_preds = action_preds.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
         action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
 
+        # L-2 norm
         loss = torch.mean((action_preds - action_targets) ** 2)
 
         return {"loss": loss}
@@ -200,13 +188,8 @@ class TrainableDT(DecisionTransformerModel):
         return super().forward(**kwargs)
 
 
-
-#
 # target_return = torch.tensor(61, dtype=torch.float32).reshape(1, 1)
 # timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
-
-
-
 
 # collator = DecisionTransformerSkatDataCollator(dataset)
 # collator = DefaultDataCollator()
@@ -231,7 +214,7 @@ model = TrainableDT(config)
 # model.to(device)
 
 training_args = TrainingArguments(
-    output_dir="output/",
+    output_dir="training_output/",
     remove_unused_columns=False,
     num_train_epochs=120,
     per_device_train_batch_size=64,
@@ -257,10 +240,7 @@ trainer = Trainer(
 
 trainer.train()
 
-
 # %%
-
-# TODO: evaluation
 
 # select available cudas for faster matrix computation
 # device = torch.device("cuda")
@@ -322,6 +302,12 @@ scale = 1
 # state_mean = torch.from_numpy(state_mean)
 # state_std = torch.from_numpy(state_std)
 
+state_mean = collator.state_mean.astype(np.float32)
+state_std = collator.state_std.astype(np.float32)
+
+state_mean = torch.from_numpy(state_mean).to(device="cpu")
+state_std = torch.from_numpy(state_std).to(device="cpu")
+
 # build the environment for the evaluation
 state = env.reset(env.player1)  # TODO
 target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
@@ -338,7 +324,7 @@ for t in range(MAX_EPISODE_LENGTH):
 
     # predicting the action to take
     action = get_action(model,
-                        states,  # - state_mean) / state_std,
+                        (states - state_mean) / state_std,
                         actions,
                         rewards,
                         target_return,
