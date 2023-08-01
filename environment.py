@@ -1,11 +1,11 @@
 import numpy as np
 
-from card_representation_conversion import convert_one_hot_to_card, convert_one_hot_to_vector, convert_card_to_vec, \
-    convert_vec_to_card
+from card_representation_conversion import convert_card_to_vec, convert_tuple_to_card
 
 from game.game import Game
 from game.game_state_machine import GameStateMachine
-from game.state.game_state_bid import BidCallAction, BidPassAction, PickUpSkatAction
+from game.game_variant import GameVariantSuit
+from game.state.game_state_bid import BidCallAction, BidPassAction, PickUpSkatAction, DeclareGameVariantAction
 from game.state.game_state_start import GameStateStart, StartGameAction
 from game.state.game_state_play import PlayCardAction, SurrenderAction
 from model.card import Card
@@ -19,6 +19,7 @@ state_dim = 92
 act_dim = 5
 
 
+# convert the trump from as commonly represented in one number to a (categorical) vector
 def get_trump(trump, enc="cat"):
     if enc == "cat":
         # if categorical encoding of suits is activated
@@ -134,9 +135,10 @@ class Env:
         self.action_space = act_dim
         self.observation_space = state_dim
 
-    # def _get_state(self):
-    #     state =
-    #     return torch.tensor(state, dtype=torch.float32, device=self.device).div_(255)
+        self.state = None
+
+    def _get_state(self):
+        return self.state
 
     def reset(self, current_player):
         # self.game.dealer += 1
@@ -167,6 +169,8 @@ class Env:
         self.state_machine.handle_action(BidPassAction(self.game.players[(soloist.get_id() + 1) % 3], 18))
 
         self.state_machine.handle_action(PickUpSkatAction(soloist))
+
+        self.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(trump)))
 
         # determine the position of players
         pos_p = [0, 0, 0]
@@ -199,6 +203,8 @@ class Env:
 
         game_state = np.concatenate([pos_p, trump_enc, last_trick, open_cards, hand_cards], axis=None)
 
+        self.state = game_state
+
         return game_state
 
     def step(self, card, current_player):
@@ -214,7 +220,7 @@ class Env:
         done = (self.game.round == 10)
 
         # pass action to the game state machine
-        self.state_machine.handle_action(PlayCardAction(player=current_player, card=convert_vec_to_card(card)))
+        self.state_machine.handle_action(PlayCardAction(player=current_player, card=convert_tuple_to_card(card)))
 
         # update the reward, only the last points of the trick are relevant
         reward = self.player1.current_trick_points
@@ -246,6 +252,8 @@ class Env:
         hand_cards = [convert_card_to_vec(card) for card in current_player.cards]
 
         game_state = np.concatenate([pos_p, trump_enc, last_trick, open_cards, hand_cards], axis=None)
+
+        self.state = game_state
 
         # Return state, reward, done
         return game_state, reward, done

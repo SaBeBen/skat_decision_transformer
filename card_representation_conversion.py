@@ -1,42 +1,42 @@
 from model.card import Card
 
 
-def convert_vec_to_card(card):
-    vector_rep = {
-        [0, 0, 0, 1, 7]: Card(Card.Suit.CLUB, Card.Face.ACE),  # A♣
-        [0, 0, 0, 1, 5]: Card(Card.Suit.CLUB, Card.Face.KING),  # K♣
-        [0, 0, 0, 1, 4]: Card(Card.Suit.CLUB, Card.Face.QUEEN),  # Q♣
-        [0, 0, 0, 1, 8]: Card(Card.Suit.CLUB, Card.Face.JACK),  # J♣
-        [0, 0, 0, 1, 6]: Card(Card.Suit.CLUB, Card.Face.TEN),  # 10♣
-        [0, 0, 0, 1, 3]: Card(Card.Suit.CLUB, Card.Face.NINE),  # 9♣
-        [0, 0, 0, 1, 2]: Card(Card.Suit.CLUB, Card.Face.EIGHT),  # 8♣
-        [0, 0, 0, 1, 1]: Card(Card.Suit.CLUB, Card.Face.SEVEN),  # 7♣
-        [0, 0, 0, 1, 7]: Card(Card.Suit.SPADE, Card.Face.ACE),  # A♠
-        [0, 0, 0, 1, 5]: Card(Card.Suit.SPADE, Card.Face.KING),  # K♠
-        [0, 0, 1, 0, 4]: Card(Card.Suit.SPADE, Card.Face.QUEEN),  # Q♠
-        [0, 0, 1, 0, 8]: Card(Card.Suit.SPADE, Card.Face.JACK),  # J♠
-        [0, 0, 1, 0, 6]: Card(Card.Suit.SPADE, Card.Face.TEN),  # 10♠
-        [0, 0, 1, 0, 3]: Card(Card.Suit.SPADE, Card.Face.NINE),  # 9♠
-        [0, 0, 1, 0, 2]: Card(Card.Suit.SPADE, Card.Face.EIGHT),  # 8♠
-        [0, 0, 1, 0, 1]: Card(Card.Suit.SPADE, Card.Face.SEVEN),  # 7♠
-        [0, 1, 0, 0, 7]: Card(Card.Suit.HEARTS, Card.Face.ACE),  # A♥
-        [0, 1, 0, 0, 5]: Card(Card.Suit.HEARTS, Card.Face.KING),  # K♥
-        [0, 1, 0, 0, 4]: Card(Card.Suit.HEARTS, Card.Face.QUEEN),  # Q♥
-        [0, 1, 0, 0, 8]: Card(Card.Suit.HEARTS, Card.Face.JACK),  # J♥
-        [0, 1, 0, 0, 6]: Card(Card.Suit.HEARTS, Card.Face.TEN),  # 10♥
-        [0, 1, 0, 0, 3]: Card(Card.Suit.HEARTS, Card.Face.NINE),  # 9♥
-        [0, 1, 0, 0, 2]: Card(Card.Suit.HEARTS, Card.Face.EIGHT),  # 8♥
-        [0, 1, 0, 0, 1]: Card(Card.Suit.HEARTS, Card.Face.SEVEN),  # 7♥
-        [1, 0, 0, 0, 7]: Card(Card.Suit.DIAMOND, Card.Face.ACE),  # A♦
-        [1, 0, 0, 0, 5]: Card(Card.Suit.DIAMOND, Card.Face.KING),  # K♦
-        [1, 0, 0, 0, 4]: Card(Card.Suit.DIAMOND, Card.Face.QUEEN),  # Q♦
-        [1, 0, 0, 0, 8]: Card(Card.Suit.DIAMOND, Card.Face.JACK),  # J♦
-        [1, 0, 0, 0, 6]: Card(Card.Suit.DIAMOND, Card.Face.TEN),  # 10♦
-        [1, 0, 0, 0, 3]: Card(Card.Suit.DIAMOND, Card.Face.NINE),  # 9♦
-        [1, 0, 0, 0, 2]: Card(Card.Suit.DIAMOND, Card.Face.EIGHT),  # 8♦
-        [1, 0, 0, 0, 1]: Card(Card.Suit.DIAMOND, Card.Face.SEVEN)  # 7♦
+def convert_tuple_to_card(card):
+    tuple_rep = {
+        (0, 0, 0, 1, 7): Card(Card.Suit.CLUB, Card.Face.ACE),  # A♣
+        (0, 0, 0, 1, 5): Card(Card.Suit.CLUB, Card.Face.KING),  # K♣
+        (0, 0, 0, 1, 4): Card(Card.Suit.CLUB, Card.Face.QUEEN),  # Q♣
+        (0, 0, 0, 1, 8): Card(Card.Suit.CLUB, Card.Face.JACK),  # J♣
+        (0, 0, 0, 1, 6): Card(Card.Suit.CLUB, Card.Face.TEN),  # 10♣
+        (0, 0, 0, 1, 3): Card(Card.Suit.CLUB, Card.Face.NINE),  # 9♣
+        (0, 0, 0, 1, 2): Card(Card.Suit.CLUB, Card.Face.EIGHT),  # 8♣
+        (0, 0, 0, 1, 1): Card(Card.Suit.CLUB, Card.Face.SEVEN),  # 7♣
+        (0, 0, 0, 1, 7): Card(Card.Suit.SPADE, Card.Face.ACE),  # A♠
+        (0, 0, 0, 1, 5): Card(Card.Suit.SPADE, Card.Face.KING),  # K♠
+        (0, 0, 1, 0, 4): Card(Card.Suit.SPADE, Card.Face.QUEEN),  # Q♠
+        (0, 0, 1, 0, 8): Card(Card.Suit.SPADE, Card.Face.JACK),  # J♠
+        (0, 0, 1, 0, 6): Card(Card.Suit.SPADE, Card.Face.TEN),  # 10♠
+        (0, 0, 1, 0, 3): Card(Card.Suit.SPADE, Card.Face.NINE),  # 9♠
+        (0, 0, 1, 0, 2): Card(Card.Suit.SPADE, Card.Face.EIGHT),  # 8♠
+        (0, 0, 1, 0, 1): Card(Card.Suit.SPADE, Card.Face.SEVEN),  # 7♠
+        (0, 1, 0, 0, 7): Card(Card.Suit.HEARTS, Card.Face.ACE),  # A♥
+        (0, 1, 0, 0, 5): Card(Card.Suit.HEARTS, Card.Face.KING),  # K♥
+        (0, 1, 0, 0, 4): Card(Card.Suit.HEARTS, Card.Face.QUEEN),  # Q♥
+        (0, 1, 0, 0, 8): Card(Card.Suit.HEARTS, Card.Face.JACK),  # J♥
+        (0, 1, 0, 0, 6): Card(Card.Suit.HEARTS, Card.Face.TEN),  # 10♥
+        (0, 1, 0, 0, 3): Card(Card.Suit.HEARTS, Card.Face.NINE),  # 9♥
+        (0, 1, 0, 0, 2): Card(Card.Suit.HEARTS, Card.Face.EIGHT),  # 8♥
+        (0, 1, 0, 0, 1): Card(Card.Suit.HEARTS, Card.Face.SEVEN),  # 7♥
+        (1, 0, 0, 0, 7): Card(Card.Suit.DIAMOND, Card.Face.ACE),  # A♦
+        (1, 0, 0, 0, 5): Card(Card.Suit.DIAMOND, Card.Face.KING),  # K♦
+        (1, 0, 0, 0, 4): Card(Card.Suit.DIAMOND, Card.Face.QUEEN),  # Q♦
+        (1, 0, 0, 0, 8): Card(Card.Suit.DIAMOND, Card.Face.JACK),  # J♦
+        (1, 0, 0, 0, 6): Card(Card.Suit.DIAMOND, Card.Face.TEN),  # 10♦
+        (1, 0, 0, 0, 3): Card(Card.Suit.DIAMOND, Card.Face.NINE),  # 9♦
+        (1, 0, 0, 0, 2): Card(Card.Suit.DIAMOND, Card.Face.EIGHT),  # 8♦
+        (1, 0, 0, 0, 1): Card(Card.Suit.DIAMOND, Card.Face.SEVEN)  # 7♦
     }
-    converted_card = vector_rep[card]
+    converted_card = tuple_rep[card]
 
     return converted_card
 

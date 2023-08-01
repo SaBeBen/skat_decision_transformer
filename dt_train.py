@@ -27,7 +27,7 @@ from transformers import DataCollatorWithPadding
 
 state_dim = 92
 act_dim = 5
-
+device = torch.device("cuda")
 
 # from datasets import load_dataset
 
@@ -200,23 +200,13 @@ class TrainableDT(DecisionTransformerModel):
         return super().forward(**kwargs)
 
 
-# device = torch.device("cuda")
+
 #
 # target_return = torch.tensor(61, dtype=torch.float32).reshape(1, 1)
 # timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
 
 
-training_args = TrainingArguments(
-    output_dir="output/",
-    remove_unused_columns=False,
-    num_train_epochs=120,
-    per_device_train_batch_size=64,
-    learning_rate=1e-4,
-    weight_decay=1e-4,
-    warmup_ratio=0.1,
-    optim="adamw_torch",
-    max_grad_norm=0.25,
-)
+
 
 # collator = DecisionTransformerSkatDataCollator(dataset)
 # collator = DefaultDataCollator()
@@ -237,6 +227,20 @@ collator = DecisionTransformerSkatDataCollator(dataset["train"])
 
 config = DecisionTransformerConfig(state_dim=collator.state_dim, act_dim=collator.act_dim)
 model = TrainableDT(config)
+
+# model.to(device)
+
+training_args = TrainingArguments(
+    output_dir="output/",
+    remove_unused_columns=False,
+    num_train_epochs=120,
+    per_device_train_batch_size=64,
+    learning_rate=1e-4,
+    weight_decay=1e-4,
+    warmup_ratio=0.1,
+    optim="adamw_torch",
+    max_grad_norm=0.25,
+)
 
 trainer = Trainer(
     model=model,
@@ -264,8 +268,9 @@ trainer.train()
 TARGET_RETURN = 61
 
 # evaluation
-# model = model.to(device)
+model = model.to("cpu")
 model.eval()
+# dataset.to
 
 env = environment.Env()
 
@@ -296,7 +301,7 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
 
     # perform the prediction
-    state_preds, action_preds, return_preds = model(
+    state_preds, action_preds, return_preds = model.original_forward(
         states=states,
         actions=actions,
         rewards=rewards,
@@ -342,6 +347,9 @@ for t in range(MAX_EPISODE_LENGTH):
     print(f"action {t}: {action}")
     actions[-1] = action
     action = action.detach().numpy()
+
+    # round for the discrete action
+    action = tuple([round(a) for a in action])
 
     # interact with the environment based on this action
     state, reward, done, _ = env.step(action, env.player1)  # TODO
