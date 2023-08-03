@@ -9,24 +9,27 @@ import data_pipeline
 import environment
 
 # %%
-dataset = data_pipeline.get_states_actions_rewards(amount_games=10,
-                                                   # point_rewards=True
-                                                   )
+print("Loading data...")
+data, one_game = data_pipeline.get_states_actions_rewards(amount_games=10,
+                                                          # point_rewards=True
+                                                          game_index=8)
 
 # %%
-dataset = DatasetDict({"train": Dataset.from_dict(dataset)})
+dataset = DatasetDict({"train": Dataset.from_dict(data)})
 
 # %%
 
 state_dim = 92
-act_dim = 5
+act_dim = 12
+
+
 # device = torch.device("cuda") # "cpu"
 
 
 def get_batch_ind():  # game_length
     # picks game indices
     # this picks the same game over *times* times
-    # (WC GameID 4)
+    # (WC GameID 4: Agent sits in rear hand as soloist)
     times = 100
     return np.tile(np.arange(8, 9), times)
 
@@ -138,7 +141,7 @@ class DecisionTransformerSkatDataCollator:
             s[-1] = (s[-1] - self.state_mean) / self.state_std
 
             a[-1] = np.concatenate(
-                [np.zeros((1, self.max_len - tlen, self.act_dim)), a[-1]],  # * -10.0
+                [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
                 axis=1,
             )
             r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
@@ -237,7 +240,7 @@ trainer = Trainer(
 # Without a pre-tokenizer that will split our inputs into cards and other encodings like pos_tp, trump, surrender
 # we might get tokens that overlap several words
 
-
+print("Training...")
 trainer.train()
 
 # %%
@@ -309,7 +312,7 @@ state_mean = torch.from_numpy(state_mean).to(device="cpu")
 state_std = torch.from_numpy(state_std).to(device="cpu")
 
 # build the environment for the evaluation
-state = env.reset(env.player1)  # TODO
+state = env.reset(current_player_id=3, game_env=one_game)  # game_states=dataset['train'][8]['states'])  # TODO
 target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
 states = torch.from_numpy(state).reshape(1, state_dim).float()
 actions = torch.zeros((0, act_dim)).float()
@@ -335,10 +338,11 @@ for t in range(MAX_EPISODE_LENGTH):
     action = action.detach().numpy()
 
     # round for the discrete action
+    # TODO: mask
     action = tuple([round(a) for a in action])
 
     # interact with the environment based on this action
-    state, reward, done, _ = env.step(action, env.player1)  # TODO
+    state, reward, done = env.step(action)  # TODO
 
     cur_state = torch.from_numpy(state).reshape(1, state_dim)
     states = torch.cat([states, cur_state], dim=0)

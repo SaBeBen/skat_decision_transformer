@@ -125,39 +125,120 @@ def convert_one_hot_to_vector(card):
     # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
     vector_rep = {
         0: [0, 0, 0, 1, 7],  # A♣
-        1: [0, 0, 0, 1, 6],  # K♣
-        2: [0, 0, 0, 1, 5],  # Q♣
+        1: [0, 0, 0, 1, 5],  # K♣
+        2: [0, 0, 0, 1, 4],  # Q♣
         3: [0, 0, 0, 1, 8],  # J♣
-        4: [0, 0, 0, 1, 4],  # 10♣
+        4: [0, 0, 0, 1, 6],  # 10♣
         5: [0, 0, 0, 1, 3],  # 9♣
         6: [0, 0, 0, 1, 2],  # 8♣
         7: [0, 0, 0, 1, 1],  # 7♣
         8: [0, 0, 1, 0, 7],  # A♠
-        9: [0, 0, 1, 0, 6],  # K♠
-        10: [0, 0, 1, 0, 5],  # Q♠
+        9: [0, 0, 1, 0, 5],  # K♠
+        10: [0, 0, 1, 0, 4],  # Q♠
         11: [0, 0, 1, 0, 8],  # J♠
-        12: [0, 0, 1, 0, 4],  # 10♠
+        12: [0, 0, 1, 0, 6],  # 10♠
         13: [0, 0, 1, 0, 3],  # 9♠
         14: [0, 0, 1, 0, 2],  # 8♠
         15: [0, 0, 1, 0, 1],  # 7♠
         16: [0, 1, 0, 0, 7],  # A♥
-        17: [0, 1, 0, 0, 6],  # K♥
-        18: [0, 1, 0, 0, 5],  # Q♥
+        17: [0, 1, 0, 0, 5],  # K♥
+        18: [0, 1, 0, 0, 4],  # Q♥
         19: [0, 1, 0, 0, 8],  # J♥
-        20: [0, 1, 0, 0, 4],  # 10♥
+        20: [0, 1, 0, 0, 6],  # 10♥
         21: [0, 1, 0, 0, 3],  # 9♥
         22: [0, 1, 0, 0, 2],  # 8♥
         23: [0, 1, 0, 0, 1],  # 7♥
         24: [1, 0, 0, 0, 7],  # A♦
-        25: [1, 0, 0, 0, 6],  # K♦
-        26: [1, 0, 0, 0, 5],  # Q♦
+        25: [1, 0, 0, 0, 5],  # K♦
+        26: [1, 0, 0, 0, 4],  # Q♦
         27: [1, 0, 0, 0, 8],  # J♦
-        28: [1, 0, 0, 0, 4],  # 10♦
+        28: [1, 0, 0, 0, 6],  # 10♦
         29: [1, 0, 0, 0, 3],  # 9♦
         30: [1, 0, 0, 0, 2],  # 8♦
         31: [1, 0, 0, 0, 1]  # 7♦
     }
     converted_card = vector_rep[card]
+
+    return converted_card
+
+
+def convert_one_hot_to_tuple(card):
+    # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
+    tuple_rep = {
+        0: (0, 0, 0, 1, 7),  # A♣
+        1: (0, 0, 0, 1, 5),  # K♣
+        2: (0, 0, 0, 1, 4),  # Q♣
+        3: (0, 0, 0, 1, 8),  # J♣
+        4: (0, 0, 0, 1, 6),  # 10♣
+        5: (0, 0, 0, 1, 3),  # 9♣
+        6: (0, 0, 0, 1, 2),  # 8♣
+        7: (0, 0, 0, 1, 1),  # 7♣
+        8: (0, 0, 1, 0, 7),  # A♠
+        9: (0, 0, 1, 0, 5),  # K♠
+        10: (0, 0, 1, 0, 4),  # Q♠
+        11: (0, 0, 1, 0, 8),  # J♠
+        12: (0, 0, 1, 0, 6),  # 10♠
+        13: (0, 0, 1, 0, 3),  # 9♠
+        14: (0, 0, 1, 0, 2),  # 8♠
+        15: (0, 0, 1, 0, 1),  # 7♠
+        16: (0, 1, 0, 0, 7),  # A♥
+        17: (0, 1, 0, 0, 5),  # K♥
+        18: (0, 1, 0, 0, 4),  # Q♥
+        19: (0, 1, 0, 0, 8),  # J♥
+        20: (0, 1, 0, 0, 6),  # 10♥
+        21: (0, 1, 0, 0, 3),  # 9♥
+        22: (0, 1, 0, 0, 2),  # 8♥
+        23: (0, 1, 0, 0, 1),  # 7♥
+        24: (1, 0, 0, 0, 7),  # A♦
+        25: (1, 0, 0, 0, 5),  # K♦
+        26: (1, 0, 0, 0, 4),  # Q♦
+        27: (1, 0, 0, 0, 8),  # J♦
+        28: (1, 0, 0, 0, 6),  # 10♦
+        29: (1, 0, 0, 0, 3),  # 9♦
+        30: (1, 0, 0, 0, 2),  # 8♦
+        31: (1, 0, 0, 0, 1)  # 7♦
+    }
+    converted_card = tuple_rep[card]
+
+    return converted_card
+
+
+def convert_card_to_tuple(card):
+    tuple_rep = {
+        Card(Card.Suit.CLUB, Card.Face.ACE): (0, 0, 0, 1, 7),  # A♣
+        Card(Card.Suit.CLUB, Card.Face.KING): (0, 0, 0, 1, 5),  # K♣
+        Card(Card.Suit.CLUB, Card.Face.QUEEN): (0, 0, 0, 1, 4),  # Q♣
+        Card(Card.Suit.CLUB, Card.Face.JACK): (0, 0, 0, 1, 8),  # J♣
+        Card(Card.Suit.CLUB, Card.Face.TEN): (0, 0, 0, 1, 6),  # 10♣
+        Card(Card.Suit.CLUB, Card.Face.NINE): (0, 0, 0, 1, 3),  # 9♣
+        Card(Card.Suit.CLUB, Card.Face.EIGHT): (0, 0, 0, 1, 2),  # 8♣
+        Card(Card.Suit.CLUB, Card.Face.SEVEN): (0, 0, 0, 1, 1),  # 7♣
+        Card(Card.Suit.SPADE, Card.Face.ACE): (0, 0, 1, 0, 7),  # A♠
+        Card(Card.Suit.SPADE, Card.Face.KING): (0, 0, 1, 0, 5),  # K♠
+        Card(Card.Suit.SPADE, Card.Face.QUEEN): (0, 0, 1, 0, 4),  # Q♠
+        Card(Card.Suit.SPADE, Card.Face.JACK): (0, 0, 1, 0, 8),  # J♠
+        Card(Card.Suit.SPADE, Card.Face.TEN): (0, 0, 1, 0, 6),  # 10♠
+        Card(Card.Suit.SPADE, Card.Face.NINE): (0, 0, 1, 0, 3),  # 9♠
+        Card(Card.Suit.SPADE, Card.Face.EIGHT): (0, 0, 1, 0, 2),  # 8♠
+        Card(Card.Suit.SPADE, Card.Face.SEVEN): (0, 0, 1, 0, 1),  # 7♠
+        Card(Card.Suit.HEARTS, Card.Face.ACE): (0, 1, 0, 0, 7),  # A♥
+        Card(Card.Suit.HEARTS, Card.Face.KING): (0, 1, 0, 0, 5),  # K♥
+        Card(Card.Suit.HEARTS, Card.Face.QUEEN): (0, 1, 0, 0, 4),  # Q♥
+        Card(Card.Suit.HEARTS, Card.Face.JACK): (0, 1, 0, 0, 8),  # J♥
+        Card(Card.Suit.HEARTS, Card.Face.TEN): (0, 1, 0, 0, 6),  # 10♥
+        Card(Card.Suit.HEARTS, Card.Face.NINE): (0, 1, 0, 0, 3),  # 9♥
+        Card(Card.Suit.HEARTS, Card.Face.EIGHT): (0, 1, 0, 0, 2),  # 8♥
+        Card(Card.Suit.HEARTS, Card.Face.SEVEN): (0, 1, 0, 0, 1),  # 7♥
+        Card(Card.Suit.DIAMOND, Card.Face.ACE): (1, 0, 0, 0, 7),  # A♦
+        Card(Card.Suit.DIAMOND, Card.Face.KING): (1, 0, 0, 0, 5),  # K♦
+        Card(Card.Suit.DIAMOND, Card.Face.QUEEN): (1, 0, 0, 0, 4),  # Q♦
+        Card(Card.Suit.DIAMOND, Card.Face.JACK): (1, 0, 0, 0, 8),  # J♦
+        Card(Card.Suit.DIAMOND, Card.Face.TEN): (1, 0, 0, 0, 6),  # 10♦
+        Card(Card.Suit.DIAMOND, Card.Face.NINE): (1, 0, 0, 0, 3),  # 9♦
+        Card(Card.Suit.DIAMOND, Card.Face.EIGHT): (1, 0, 0, 0, 2),  # 8♦
+        Card(Card.Suit.DIAMOND, Card.Face.SEVEN): (1, 0, 0, 0, 1)  # 7♦
+    }
+    converted_card = tuple_rep[card]
 
     return converted_card
 

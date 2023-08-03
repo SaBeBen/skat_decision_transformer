@@ -6,6 +6,30 @@ import matplotlib.pyplot as plt
 
 # %%
 
+
+# IDs of the first 20 games
+# 8x619M13Bx36
+# 8x619M13BxQH
+# 8x619M13Bx3U
+# 8x619M13Bx3C
+# 8x619M13Bx30
+# 8x619M13Bx32
+# 8x619M13Bx9S
+# 8x619M13Bx3B
+# 8x619M13Bx3X
+# 8x619M13Bx9V
+# 8x619M13Bx99
+# 8x619M13Bx9Y
+# 8x619M13Bx38
+# 8x619M13Bx31
+# 8x619M13Bx3M
+# 8x619M13Bx9Q
+# 8x619M13Bx3E
+# 8x619M13Bx3P
+# 8x619M13Bx3J
+# 8x619M13Bx9C
+# 8x619M13Bx9M
+
 """The dataset of the sequence the cards (cs) were played follows"""
 
 championships = ["wc", "bl", "gc", "gtc", "rc"]

@@ -87,6 +87,7 @@ class GameVariantGrand(GameVariant):
 # ------------------------------------------------------------
 class GameVariantSuit(GameVariantGrand):
     def __init__(self, trump_suit):
+        # expects name of trump suit
         self.trump_suit = trump_suit
 
     def compare_cards(self, card_higher, card_lower):
@@ -104,7 +105,7 @@ class GameVariantSuit(GameVariantGrand):
         return player.has_face(Card.Face.JACK) or player.has_suit(self.trump_suit)
 
     def get_trump(self):
-        return self.trump_suit.value + 9
+        return Card.Suit[self.trump_suit].value + 9
 
 
 # ------------------------------------------------------------
