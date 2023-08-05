@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from datasets import Dataset, DatasetDict
+from torch import nn
 
 from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
 import data_pipeline
@@ -21,6 +22,7 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 
 state_dim = 92
 act_dim = 12
+card_dim = 5
 
 
 # device = torch.device("cuda") # "cpu"
@@ -138,7 +140,7 @@ class DecisionTransformerSkatDataCollator:
             s[-1] = np.concatenate([padding, s[-1]], axis=1)
 
             # state normalization
-            s[-1] = (s[-1] - self.state_mean) / self.state_std
+            # s[-1] = (s[-1] - self.state_mean) / self.state_std
 
             a[-1] = np.concatenate(
                 [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
@@ -149,6 +151,7 @@ class DecisionTransformerSkatDataCollator:
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1)  # / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
+            # TODO: mask could stay the same, what is s[-1]?
 
         s = torch.from_numpy(np.concatenate(s, axis=0)).float()
         a = torch.from_numpy(np.concatenate(a, axis=0)).float()
@@ -182,8 +185,16 @@ class TrainableDT(DecisionTransformerModel):
         action_preds = action_preds.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
         action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
 
+        # mse
+        # loss = torch.mean((action_preds - action_targets) ** 2)
+
         # L-2 norm
-        loss = torch.mean((action_preds - action_targets) ** 2)
+        # loss = torch.linalg.norm(action_preds - action_targets, ord=2)
+
+        # cross entropy loss
+        loss_fct = nn.CrossEntropyLoss()
+
+        loss = loss_fct(action_preds, action_targets)
 
         return {"loss": loss}
 
@@ -219,13 +230,15 @@ model = TrainableDT(config)
 training_args = TrainingArguments(
     output_dir="training_output/",
     remove_unused_columns=False,
-    num_train_epochs=120,
+    num_train_epochs=200,
     per_device_train_batch_size=64,
     learning_rate=1e-4,
     weight_decay=1e-4,
     warmup_ratio=0.1,
     optim="adamw_torch",
     max_grad_norm=0.25,
+    logging_steps=50,
+    logging_dir="./training-logs"
 )
 
 trainer = Trainer(
@@ -236,10 +249,6 @@ trainer = Trainer(
     data_collator=collator,
 )
 
-# We could train our tokenizer right now, but it wouldn’t be optimal.
-# Without a pre-tokenizer that will split our inputs into cards and other encodings like pos_tp, trump, surrender
-# we might get tokens that overlap several words
-
 print("Training...")
 trainer.train()
 
@@ -248,7 +257,7 @@ trainer.train()
 # select available cudas for faster matrix computation
 # device = torch.device("cuda")
 
-TARGET_RETURN = 61
+TARGET_RETURN = 90
 
 # evaluation
 model = model.to("cpu")
@@ -327,7 +336,7 @@ for t in range(MAX_EPISODE_LENGTH):
 
     # predicting the action to take
     action = get_action(model,
-                        (states - state_mean) / state_std,
+                        states, # - state_mean) / state_std,
                         actions,
                         rewards,
                         target_return,
@@ -338,11 +347,29 @@ for t in range(MAX_EPISODE_LENGTH):
     action = action.detach().numpy()
 
     # round for the discrete action
-    # TODO: mask
-    action = tuple([round(a) for a in action])
+    # state = [tuple(st) for st in np.array_split(state[- card_dim * MAX_EPISODE_LENGTH:], 12)]
+
+    # hand cards within the state are padded from right to left after each action
+    # mask the action
+    action[-t:] = 0
+
+    valid_actions = action[:MAX_EPISODE_LENGTH-t]
+
+    # TODO: mask to be only able to play legal cards
+
+    # subset size of 6, wants to select a card already played/out of bounds: IndexError: list index out of range
+
+    # when increasing the subset size from 6 to 12, 2nd Skat is put wrongly and Agent wants to make an invalid move
+
+    # get the index of the card with the highest probability
+    card_index = np.argmax(valid_actions)
+
+    # only select the best card
+    action[:] = 0
+    action[card_index] = 1
 
     # interact with the environment based on this action
-    state, reward, done = env.step(action)  # TODO
+    state, reward, done = env.step(tuple(action))  # TODO
 
     cur_state = torch.from_numpy(state).reshape(1, state_dim)
     states = torch.cat([states, cur_state], dim=0)

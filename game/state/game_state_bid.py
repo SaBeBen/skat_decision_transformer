@@ -2,6 +2,7 @@ from exceptions import InvalidCardSize, InvalidPlayerMove
 
 from game.game_state_machine import GameState, PlayerAction
 from game.state.game_state_play import GameStatePlay
+from model.card import Card
 from model.player import Player
 
 
@@ -57,11 +58,16 @@ class GameStateBid(GameState):
     def put_down_skat(self, player, cards_to_put):
         if player.type is not Player.Type.DECLARER:
             raise InvalidPlayerMove("Player " + player.name + " is not declarer, so he cannot put something into Skat")
-        elif len(cards_to_put) != 2:
+        # elif len(cards_to_put) != 2:
+        #     raise InvalidCardSize("Player has to put down exactly 2 cards not " + str(len(cards_to_put)))
+        if isinstance(cards_to_put, Card):
+            self.game.skat.append(cards_to_put)
+            player.cards.remove(cards_to_put)
+        elif len(cards_to_put) == 2:
+            self.game.skat.extend(cards_to_put)
+            [player.cards.remove(card) for card in cards_to_put]
+        else:
             raise InvalidCardSize("Player has to put down exactly 2 cards not " + str(len(cards_to_put)))
-
-        self.game.skat.extend(cards_to_put)
-        [player.cards.remove(card) for card in cards_to_put]
 
     def declare_game(self, player, game_variant):
         if player.type is not Player.Type.DECLARER:

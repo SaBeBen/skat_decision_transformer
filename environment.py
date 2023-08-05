@@ -1,7 +1,8 @@
 import numpy as np
 
 import exceptions
-from card_representation_conversion import convert_card_to_tuple, convert_tuple_to_card
+from card_representation_conversion import convert_card_to_tuple, convert_tuple_to_card, convert_one_hot_to_tuple, \
+    convert_one_hot_to_card
 
 from game.game import Game
 from game.game_state_machine import GameStateMachine
@@ -147,11 +148,13 @@ class Env:
 
         self.hand = False
         self.skat_down = []
-        # self.skat_up = None
         self.pos_p = None
         self.trump_enc = None
+
         self.current_player = None
         self.skat_put = [False, False]
+        self.trick = 0
+        self.skat_and_cs = []
 
     def _get_state(self):
         return self.state
@@ -201,6 +204,8 @@ class Env:
 
             self.state_machine.handle_action(PickUpSkatAction(soloist))
 
+            self.current_player.cards.sort()
+
             self.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(trump)))
 
         else:
@@ -208,6 +213,7 @@ class Env:
             # state of game after Skat was picked up is used
             self.game = game_env.game
             self.state_machine = game_env.state_machine
+            self.skat_and_cs = game_env.skat_and_cs
             self.player1 = game_env.player1
             self.player2 = game_env.player2
             self.player3 = game_env.player3
@@ -259,6 +265,9 @@ class Env:
         return game_state
 
     def step(self, card_index):
+        # TODO: check whether the states are similar to the training
+        # TODO: only select playable cards
+
         # if the action is surrendering
         if card_index[0] == -2:
             self.state_machine.handle_action(SurrenderAction(player=self.current_player))
@@ -274,6 +283,8 @@ class Env:
         # the game is finished after 10 rounds
         done = (self.game.round == 10)
 
+        #  padding from right to left: cards in env are in the same order
+
         # split Skat putting into two actions:
         # After the first action the first card of the Skat will not be visible in the state,
         # after the second action the second card of the Skat will not be visible in the state
@@ -281,33 +292,36 @@ class Env:
             # update status
             self.skat_put[0] = False
 
-            # update hand cards before the Skat putting
-            hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+            # put down the second Skat card
+            if not self.hand:
 
-            if not self.hand and self.current_player == self.game.get_declarer():
-                # get the first Skat card from the soloist's hand
-                try:
+                if self.current_player is self.game.get_declarer():
                     # first Skat card as action
-                    self.skat_down.append(
-                        self.current_player.cards[card_index.index(1)])  # [convert_tuple_to_card(tuple(card))]
-                    # remove first Skat card from hand
-                    hand_cards.remove(convert_card_to_tuple(self.skat_down[0]))
+                    self.skat_down.append(self.current_player.cards[card_index.index(1)])
+
+                    # add the card value of second Skat card as reward
+                    reward = Card.get_value(self.skat_down[0])
+
+                try:
+                    self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[0]))
                 except ValueError:
                     raise exceptions.InvalidPlayerMove(
                         f"Player {self.current_player.get_id()} is not holding card {self.skat_down[0]}! "
                         f"The hand cards are {self.current_player.cards}")
 
-                # hand_cards = [list(card) for card in hand_cards]
+                self.current_player.cards.sort()
+
+                # update hand cards after the Skat putting
+                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
 
                 # pad the put first Skat card
                 hand_cards.extend([[0] * card_dim])
             else:
+                # update hand cards
+                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+
                 # pad both Skat cards
                 hand_cards.extend([[0] * card_dim, [0] * card_dim])
-
-            if self.current_player is self.game.get_declarer() and not self.hand:
-                # add the card value of first Skat card as reward
-                reward = Card.get_value(self.skat_down[0])
 
             last_trick = [[0] * card_dim, [0] * card_dim, [0] * card_dim]
 
@@ -317,63 +331,116 @@ class Env:
             # update status
             self.skat_put[1] = False
 
-            # second Skat card as action
-            self.skat_down.append(self.current_player.cards[card_index.index(1)])
-
-            if not self.hand and self.current_player is self.game.get_declarer():
-                # add the card value of second Skat card as reward
-                reward = Card.get_value(self.skat_down[1])
-
-            last_trick = [[0] * card_dim, [0] * card_dim, [0] * card_dim]
-
-            open_cards = [[0] * card_dim, [0] * card_dim]
-
-            # put down the two Skat cards from the last two actions
+            # put down the second Skat card
             if not self.hand:
+
+                if self.current_player is self.game.get_declarer():
+                    # second Skat card as action
+                    self.skat_down.append(self.current_player.cards[card_index.index(1)])
+                    # add the card value of second Skat card as reward
+                    reward = Card.get_value(self.skat_down[1])
+
                 try:
-                    self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down))
+                    self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[1]))
                 except ValueError:
                     raise exceptions.InvalidPlayerMove(
                         f"Player {self.current_player.get_id()} is not holding card {self.skat_down[1]}! "
                         f"The hand cards are {self.current_player.cards}")
 
+            # once a card is removed, is only the element removed and the list is shrunken -> order is still valid
+            # self.current_player.cards.sort()
+
             # update hand cards, after Skat was put
             hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
-
-            # hand_cards = [list(card) for card in hand_cards]
 
             # after Skat putting, every player has 10 cards which need to be padded
             # this state will be the third state, namely the one after Skat putting
             hand_cards.extend([[0] * card_dim, [0] * card_dim])
+
+            last_trick = [[0] * card_dim, [0] * card_dim, [0] * card_dim]
+
+            open_cards = [[0] * card_dim, [0] * card_dim]
+
+            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
         else:
+            self.trick += 1
+
             # select the card on the players hand
             card = self.current_player.cards[card_index.index(1)]
 
-            # pass action to the game state machine
-            self.state_machine.handle_action(PlayCardAction(player=self.current_player,
-                                                            card=card))  # convert_tuple_to_card(
+            # if the player sits in the front this trick
+            if self.game.trick.get_current_player() == self.current_player:
+                # iterates over players, each time PlayCardAction is called the role of the current player rotates
+                self.state_machine.handle_action(
+                    PlayCardAction(player=self.current_player, card=card))
 
-            # update the reward, only the last points of the trick are relevant
-            reward = self.current_player.current_trick_points
+                # in position of first player, there are no open cards
+                open_cards = [[0] * card_dim, [0] * card_dim]
 
-            # get the cards of the last trick and convert them to the card representation
-            last_trick = [convert_card_to_tuple(card) for card in self.game.get_last_trick_cards()]
+                # self.current_player.cards.sort()
 
-            # get the open cards and convert them to the card representation
-            open_cards = [convert_card_to_tuple(card) for card in self.game.trick.get_open_cards()]
+                # convert each card to the desired encoding
+                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
 
-            open_cards.extend([0] * card_dim * (2 - len(open_cards)))
+                # pad the cards to a length of 12
+                hand_cards.extend([card_dim * [0]] * (self.trick + 2))
 
-            # update hand cards
-            hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+            else:
+                # iterates over players, each time PlayCardAction is called the role of the current player rotates
+                self.state_machine.handle_action(
+                    PlayCardAction(player=self.game.trick.get_current_player(),
+                                   card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick - 1])))
 
-            if self.game.get_declarer() is not self.current_player or self.hand:
-                # pad the current cards to a length of 12, if agent does not pick up Skat
-                hand_cards.extend([[0] * card_dim, [0] * card_dim])
+            # if the player sits in the middle this trick
+            if self.game.trick.get_current_player() == self.current_player:
+                # iterates over players, each time PlayCardAction is called the role of the current player rotates
+                self.state_machine.handle_action(PlayCardAction(player=self.current_player, card=card))
+
+                # in position of the second player, there is one open card
+                open_cards = [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick - 1]), [0] * card_dim]
+
+                # convert each card to the desired encoding
+                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+
+                # pad the cards to a length of 12
+                hand_cards.extend([card_dim * [0]] * (self.trick + 2))
+            else:
+                # iterates over players, each time PlayCardAction is called the role of the current player rotates
+                self.state_machine.handle_action(
+                    PlayCardAction(player=self.game.trick.get_current_player(),
+                                   card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick])))
+
+            # if the player sits in the rear this trick
+            if self.game.trick.get_current_player() == self.current_player:
+                # iterates over players, each time PlayCardAction is called the role of the current player rotates
+                self.state_machine.handle_action(PlayCardAction(player=self.current_player, card=card))
+
+                # in position of the third player, there are two open cards
+                open_cards = [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick - 1]),
+                              convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick])]
+
+                # convert each card to the desired encoding
+                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+
+                # pad the cards to a length of 12
+                hand_cards.extend([card_dim * [0]] * (self.trick + 2))
+
+            else:
+                # iterates over players, each time PlayCardAction is called the role of the current player rotates
+                self.state_machine.handle_action(
+                    PlayCardAction(player=self.game.trick.get_current_player(),
+                                   card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick + 1])))
+
+            # TODO: surrender
+            last_trick = [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick - 1])] + \
+                         [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick])] + \
+                         [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick + 1])]
 
         game_state = np.concatenate([self.pos_p, self.trump_enc, last_trick, open_cards, hand_cards], axis=None)
 
         self.state = game_state
+
+        reward = self.current_player.current_trick_points
 
         # TODO: get game_points
         if done:
