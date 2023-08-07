@@ -390,6 +390,7 @@ class Env:
                 self.state_machine.handle_action(
                     PlayCardAction(player=self.game.trick.get_current_player(),
                                    card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick - 1])))
+                # TODO: Due to the wrong card being played, the order changes, so the wrong player tries to play a card
 
             # if the player sits in the middle this trick
             if self.game.trick.get_current_player() == self.current_player:
@@ -409,6 +410,7 @@ class Env:
                 self.state_machine.handle_action(
                     PlayCardAction(player=self.game.trick.get_current_player(),
                                    card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick])))
+
 
             # if the player sits in the rear this trick
             if self.game.trick.get_current_player() == self.current_player:

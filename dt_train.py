@@ -47,7 +47,7 @@ def get_batch_ind():  # game_length
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"
-    max_len: int = 6  # subsets of the episode we use for training, our episode length is short
+    max_len: int = 12  # subsets of the episode we use for training, our episode length is short
     state_dim: int = state_dim  # size of state space
     act_dim: int = act_dim  # size of action space
     max_ep_len: int = 12  # max episode length in the dataset
@@ -196,22 +196,19 @@ class TrainableDT(DecisionTransformerModel):
 
         loss = loss_fct(action_preds, action_targets)
 
+        # manual logging
+        # writer.add_scalar("Loss/train", loss,)  # problem: get episode
+
         return {"loss": loss}
 
     def original_forward(self, **kwargs):
         return super().forward(**kwargs)
 
 
-# target_return = torch.tensor(61, dtype=torch.float32).reshape(1, 1)
-# timesteps = torch.tensor(0, device=device, dtype=torch.long).reshape(1, 1)
-
-# collator = DecisionTransformerSkatDataCollator(dataset)
-# collator = DefaultDataCollator()
-
 configuration = DecisionTransformerConfig(state_dim=state_dim,  # each state consist out of
                                           act_dim=act_dim,  # each action consists out of one played card ()
                                           max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
-                                          vocab_size=35,  # there are 32 cards + pos_tp + trump + surrender
+                                          vocab_size=32,  # there are 32 cards + pos_tp + trump_enc + surrender
                                           # TODO: other encodings (like pos_tp)?
                                           )
 # TODO: how is the vocabulary defined?
@@ -220,14 +217,15 @@ configuration = DecisionTransformerConfig(state_dim=state_dim,  # each state con
 
 collator = DecisionTransformerSkatDataCollator(dataset["train"])
 
-# tokenizer = BertTokenizer()
-
 config = DecisionTransformerConfig(state_dim=collator.state_dim, act_dim=collator.act_dim)
 model = TrainableDT(config)
 
 # model.to(device)
 
+# logging_files_name = "dt_training_{}_{}.log"
+
 training_args = TrainingArguments(
+    report_to=["tensorboard"],
     output_dir="training_output/",
     remove_unused_columns=False,
     num_train_epochs=200,
@@ -237,32 +235,66 @@ training_args = TrainingArguments(
     warmup_ratio=0.1,
     optim="adamw_torch",
     max_grad_norm=0.25,
-    logging_steps=50,
-    logging_dir="./training-logs"
+    logging_steps=10,
+    logging_dir="./training-logs",
 )
 
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=dataset["train"],
-    # eval_dataset=dataset["train"],
+    # eval_dataset=dataset["train"][8],
     data_collator=collator,
+    # callbacks=[tensorboard_callback]
 )
+
+# writer = SummaryWriter()
 
 print("Training...")
 trainer.train()
+
+# for tensorboard visualization:
+# 1. rm -r ./training-logs/*
+# 2. run training
+# 3. tensorboard --logdir=./training-logs
+
+
+# # Training loop with episode tracking
+# current_episode = 0
+# for epoch in range(round(training_args.num_train_epochs)):
+#     for batch in trainer.get_train_dataloader():
+#         # Increment episode number
+#         current_episode += 1
+#
+#         # Perform forward and backward passes
+#         loss = trainer.training_step(model, batch)
+#
+#         trainer.optimizer.step()
+#         trainer.lr_scheduler.step()
+#
+#         writer.add_scalar("Loss/episode", loss, epoch)
+#
+#         # Log the episode number and loss
+#         trainer.log_metrics({"episode": current_episode, "loss": loss.item()})
+#
+#     # Save the model at the end of each epoch
+#     trainer.save_model()
+#
+# # Save the final model
+# trainer.save_model()
+
+# writer.flush()
 
 # %%
 
 # select available cudas for faster matrix computation
 # device = torch.device("cuda")
 
-TARGET_RETURN = 90
+TARGET_RETURN = 102
 
 # evaluation
 model = model.to("cpu")
 model.eval()
-# dataset.to
 
 env = environment.Env()
 
@@ -304,7 +336,6 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     return action_preds[0, -1]
 
 
-# This was normalized during training
 MAX_EPISODE_LENGTH = 12
 scale = 1
 
@@ -336,7 +367,7 @@ for t in range(MAX_EPISODE_LENGTH):
 
     # predicting the action to take
     action = get_action(model,
-                        states, # - state_mean) / state_std,
+                        states,  # - state_mean) / state_std,
                         actions,
                         rewards,
                         target_return,
@@ -346,14 +377,11 @@ for t in range(MAX_EPISODE_LENGTH):
     actions[-1] = action
     action = action.detach().numpy()
 
-    # round for the discrete action
-    # state = [tuple(st) for st in np.array_split(state[- card_dim * MAX_EPISODE_LENGTH:], 12)]
-
     # hand cards within the state are padded from right to left after each action
     # mask the action
     action[-t:] = 0
 
-    valid_actions = action[:MAX_EPISODE_LENGTH-t]
+    valid_actions = action[:MAX_EPISODE_LENGTH - t]
 
     # TODO: mask to be only able to play legal cards
 
