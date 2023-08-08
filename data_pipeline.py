@@ -295,8 +295,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     env.state_machine.handle_action(BidPassAction(current_player, 18))
                     env.state_machine.handle_action(BidPassAction(current_player2, 18))
 
-            # handle_skat(env, current_player, ...)
-
             # there is no card revealed during Skat putting
             # open_cards = [[0] * card_dim, [0] * card_dim]
             open_cards = [0] * card_dim + [0] * card_dim
@@ -500,17 +498,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     else:
                         rewards.append(current_player.current_trick_points)
 
-                    # tlen = trick
-                    # # following lines are adapted from huggingface
-                    # rtg.append(discount_cumsum(rewards, gamma=1.0).reshape((1, -1, 1)))
-                    # timesteps.append(np.arange(0, tlen).reshape(1, -1))
-                    # mask.append(np.concatenate([np.zeros((1, 12 - trick)), np.ones((1, i))], axis=1))
-                    #
-                    # # pad the rtg, timesteps and mask
-                    # rtg[-1] = np.concatenate([np.zeros((1, max_len - tlen, 1)), rtg[-1]], axis=1) / scale
-                    # timesteps[-1] = np.concatenate([np.zeros((1, max_len - tlen)), timesteps[-1]], axis=1)
-                    # mask.append(np.concatenate([np.zeros((1, max_len - tlen)), np.ones((1, tlen))], axis=1))
-
                 # if hand is played, adding the Skat points in the end of the game simulates not knowing them
                 if hand:
                     if pos_p == 0:
@@ -542,10 +529,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # insert rewards
             rewards_table[3 * cs_index + i] = [float(i) for i in rewards]
             # np.array_split([float(i) for i in rewards], 12)
-
-            # rtg_table[3 * cs_index + i] = torch.from_numpy(np.concatenate(rtg, axis=0)).float()
-            # timesteps_table[3 * cs_index + i] = torch.from_numpy(np.concatenate(timesteps, axis=0)).long()
-            # mask_table[3 * cs_index + i] = torch.from_numpy(np.concatenate(mask, axis=0)).float()
 
         cs_index = cs_index + 1
 

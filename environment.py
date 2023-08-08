@@ -1,7 +1,7 @@
 import numpy as np
 
 import exceptions
-from card_representation_conversion import convert_card_to_tuple, convert_tuple_to_card, convert_one_hot_to_tuple, \
+from card_representation_conversion import convert_card_to_tuple, convert_one_hot_to_tuple, \
     convert_one_hot_to_card
 
 from game.game import Game
