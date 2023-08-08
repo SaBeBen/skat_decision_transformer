@@ -41,7 +41,7 @@ def convert_tuple_to_card(card):
     return converted_card
 
 
-def convert_card_to_vec(card):
+def convert_card_to_vector(card):
     vector_rep = {
         Card(Card.Suit.CLUB, Card.Face.ACE): [0, 0, 0, 1, 7],  # A♣
         Card(Card.Suit.CLUB, Card.Face.KING): [0, 0, 0, 1, 5],  # K♣
