@@ -1,8 +1,8 @@
 import numpy as np
 
 import exceptions
-from card_representation_conversion import convert_card_to_tuple, convert_one_hot_to_tuple, \
-    convert_one_hot_to_card
+from card_representation_conversion import convert_one_hot_to_card, convert_card_to_vector, \
+    convert_one_hot_to_vector
 
 from game.game import Game
 from game.game_state_machine import GameStateMachine
@@ -15,14 +15,14 @@ from model.card import Card
 
 from model.player import Player
 
-# position co-player (3) + trump (4) + last trick (3 * card_dim)
-# + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 92
-
 # card representation is a vector
 act_dim = 12
 
 card_dim = 5
+
+# position co-player (3) + trump (4) + last trick (3 * card_dim)
+# + open cards (2 * card_dim) + hand cards (12 * card_dim)
+state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + 12 * card_dim
 
 
 # convert the trump from as commonly represented in one number to a (categorical) vector
@@ -246,23 +246,24 @@ class Env:
         self.skat_put = [True, True]
 
         # get the cards of the last trick and convert them to the card representation
-        last_trick = [[0] * card_dim, [0] * card_dim]
+        last_trick = [0] * card_dim * 2
 
         # get the open cards and convert them to the card representation
-        open_cards = [[0] * card_dim, [0] * card_dim, [0] * card_dim]
+        open_cards = [0] * card_dim * 3
 
-        # update hand cards
-        hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+        hand_cards = []
+        for card in self.current_player.cards:
+            hand_cards += convert_card_to_vector(card)
 
         # pad the Skat on the defenders hands if the agent is one
         if current_player_id != soloist.get_id() or (current_player_id == soloist.get_id() and self.hand):
-            hand_cards.extend([[0] * card_dim, [0] * card_dim])
+            hand_cards += card_dim * [0] * 2
 
-        game_state = np.concatenate([self.pos_p, self.trump_enc, last_trick, open_cards, hand_cards], axis=None)
+        game_state = self.pos_p + self.trump_enc + last_trick + open_cards + hand_cards
 
         self.state = game_state
 
-        return game_state
+        return np.array(game_state)
 
     def step(self, card_index):
         # TODO: check whether the states are similar to the training
@@ -312,20 +313,24 @@ class Env:
                 self.current_player.cards.sort()
 
                 # update hand cards after the Skat putting
-                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+                hand_cards = []
+                for card in self.current_player.cards:
+                    hand_cards += convert_card_to_vector(card)
 
                 # pad the put first Skat card
-                hand_cards.extend([[0] * card_dim])
+                hand_cards += card_dim * [0]
             else:
                 # update hand cards
-                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+                hand_cards = []
+                for card in self.current_player.cards:
+                    hand_cards += convert_card_to_vector(card)
 
                 # pad both Skat cards
-                hand_cards.extend([[0] * card_dim, [0] * card_dim])
+                hand_cards += card_dim * [0] * 2
 
-            last_trick = [[0] * card_dim, [0] * card_dim, [0] * card_dim]
+            last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
 
-            open_cards = [[0] * card_dim, [0] * card_dim]
+            open_cards = [0] * card_dim + [0] * card_dim
 
         elif self.skat_put[1]:
             # update status
@@ -351,15 +356,17 @@ class Env:
             # self.current_player.cards.sort()
 
             # update hand cards, after Skat was put
-            hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+            hand_cards = []
+            for card in self.current_player.cards:
+                hand_cards += convert_card_to_vector(card)
 
             # after Skat putting, every player has 10 cards which need to be padded
             # this state will be the third state, namely the one after Skat putting
-            hand_cards.extend([[0] * card_dim, [0] * card_dim])
+            hand_cards += card_dim * [0] * 2
 
-            last_trick = [[0] * card_dim, [0] * card_dim, [0] * card_dim]
+            last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
 
-            open_cards = [[0] * card_dim, [0] * card_dim]
+            open_cards = [0] * card_dim + [0] * card_dim
 
             self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
         else:
@@ -375,15 +382,15 @@ class Env:
                     PlayCardAction(player=self.current_player, card=card))
 
                 # in position of first player, there are no open cards
-                open_cards = [[0] * card_dim, [0] * card_dim]
-
-                # self.current_player.cards.sort()
+                open_cards = [0] * card_dim + [0] * card_dim
 
                 # convert each card to the desired encoding
-                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+                hand_cards = []
+                for card in self.current_player.cards:
+                    hand_cards += convert_card_to_vector(card)
 
                 # pad the cards to a length of 12
-                hand_cards.extend([card_dim * [0]] * (self.trick + 2))
+                hand_cards += card_dim * [0] * (self.trick + 2)
 
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
@@ -398,19 +405,20 @@ class Env:
                 self.state_machine.handle_action(PlayCardAction(player=self.current_player, card=card))
 
                 # in position of the second player, there is one open card
-                open_cards = [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick - 1]), [0] * card_dim]
+                open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick - 1]) + [0] * card_dim
 
                 # convert each card to the desired encoding
-                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+                hand_cards = []
+                for card in self.current_player.cards:
+                    hand_cards += convert_card_to_vector(card)
 
                 # pad the cards to a length of 12
-                hand_cards.extend([card_dim * [0]] * (self.trick + 2))
+                hand_cards += card_dim * [0] * (self.trick + 2)
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
                 self.state_machine.handle_action(
                     PlayCardAction(player=self.game.trick.get_current_player(),
                                    card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick])))
-
 
             # if the player sits in the rear this trick
             if self.game.trick.get_current_player() == self.current_player:
@@ -418,14 +426,17 @@ class Env:
                 self.state_machine.handle_action(PlayCardAction(player=self.current_player, card=card))
 
                 # in position of the third player, there are two open cards
-                open_cards = [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick - 1]),
-                              convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick])]
+                open_cards = convert_one_hot_to_vector(
+                    self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
+                    self.skat_and_cs[3 * self.trick])
 
                 # convert each card to the desired encoding
-                hand_cards = [convert_card_to_tuple(card) for card in self.current_player.cards]
+                hand_cards = []
+                for card in self.current_player.cards:
+                    hand_cards += convert_card_to_vector(card)
 
                 # pad the cards to a length of 12
-                hand_cards.extend([card_dim * [0]] * (self.trick + 2))
+                hand_cards += card_dim * [0] * (self.trick + 2)
 
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
@@ -434,11 +445,12 @@ class Env:
                                    card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick + 1])))
 
             # TODO: surrender
-            last_trick = [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick - 1])] + \
-                         [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick])] + \
-                         [convert_one_hot_to_tuple(self.skat_and_cs[3 * self.trick + 1])]
+            last_trick = convert_one_hot_to_vector(
+                self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
+                self.skat_and_cs[3 * self.trick]) + convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick + 1])
 
-        game_state = np.concatenate([self.pos_p, self.trump_enc, last_trick, open_cards, hand_cards], axis=None)
+        # game_state = np.concatenate([self.pos_p, self.trump_enc, last_trick, open_cards, hand_cards], axis=None)
+        game_state = self.pos_p + self.trump_enc + last_trick + open_cards + hand_cards
 
         self.state = game_state
 
@@ -465,7 +477,7 @@ class Env:
                 reward *= 1 if game_points > 0 else 0
 
         # Return state, reward, done
-        return game_state, reward, done
+        return np.array(game_state), reward, done
 
     # def train(self):
     #     self.training = True

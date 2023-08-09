@@ -4,26 +4,31 @@ import numpy as np
 import torch
 from datasets import Dataset, DatasetDict
 from torch import nn
+from torch import Tensor
 
 from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
 import data_pipeline
 import environment
 
 # %%
+game_index = 8
+
 print("Loading data...")
-data, one_game = data_pipeline.get_states_actions_rewards(amount_games=10,
-                                                          # point_rewards=True
-                                                          game_index=8)
+data, one_game = data_pipeline.get_states_actions_rewards(amount_games=8,
+                                                          point_rewards=True,
+                                                          game_index=game_index)
 
 # %%
 dataset = DatasetDict({"train": Dataset.from_dict(data)})
 
 # %%
 
-state_dim = 92
 act_dim = 12
 card_dim = 5
 
+# position co-player (3) + trump (4) + last trick (3 * card_dim)
+# + open cards (2 * card_dim) + hand cards (12 * card_dim)
+state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + 12 * card_dim
 
 # device = torch.device("cuda") # "cpu"
 
@@ -32,7 +37,7 @@ def get_batch_ind():  # game_length
     # picks game indices
     # this picks the same game over *times* times
     # (WC GameID 4: Agent sits in rear hand as soloist)
-    times = 100
+    times = 32
     return np.tile(np.arange(8, 9), times)
 
     # return np.random.choice(
@@ -43,7 +48,7 @@ def get_batch_ind():  # game_length
     # )
 
 
-# from https://huggingface.co/blog/train-decision-transformers
+# adapted from https://huggingface.co/blog/train-decision-transformers
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"
@@ -113,11 +118,11 @@ class DecisionTransformerSkatDataCollator:
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
             # TODO: jumping randomly into a surrendered game does not work well
-            si = random.randint(0, len(feature["rewards"]) - 1)  # 0
+            si = 0  # random.randint(0, len(feature["rewards"]) - 1)  # 0
 
             # get sequences from dataset
             s.append(np.array(feature["states"]
-                              [si: self.max_len]).reshape((1, -1, self.state_dim)))
+                              [si:self.max_len]).reshape((1, -1, self.state_dim)))
             a.append(np.array(feature["actions"][si:self.max_len]).reshape((1, -1, self.act_dim)))
             r.append(np.array(feature["rewards"][si:self.max_len]).reshape((1, -1, 1)))
 
@@ -192,9 +197,13 @@ class TrainableDT(DecisionTransformerModel):
         # loss = torch.linalg.norm(action_preds - action_targets, ord=2)
 
         # cross entropy loss
-        loss_fct = nn.CrossEntropyLoss()
+        cross_ent_fct = nn.CrossEntropyLoss()
 
-        loss = loss_fct(action_preds, action_targets)
+        # soft_max_fct = nn.Softmax(1)  # TODO: softmax
+
+        cross_ent_loss = cross_ent_fct(action_preds, action_targets)
+
+        loss = cross_ent_loss
 
         # manual logging
         # writer.add_scalar("Loss/train", loss,)  # problem: get episode
@@ -228,7 +237,7 @@ training_args = TrainingArguments(
     report_to=["tensorboard"],
     output_dir="training_output/",
     remove_unused_columns=False,
-    num_train_epochs=200,
+    num_train_epochs=500,
     per_device_train_batch_size=64,
     learning_rate=1e-4,
     weight_decay=1e-4,
@@ -243,7 +252,7 @@ trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=dataset["train"],
-    # eval_dataset=dataset["train"][8],
+    # eval_dataset=dataset["train"][8], # TODO: anderes Spiel
     data_collator=collator,
     # callbacks=[tensorboard_callback]
 )
@@ -352,12 +361,13 @@ state_mean = torch.from_numpy(state_mean).to(device="cpu")
 state_std = torch.from_numpy(state_std).to(device="cpu")
 
 # build the environment for the evaluation
-state = env.reset(current_player_id=3, game_env=one_game)  # game_states=dataset['train'][8]['states'])  # TODO
+state = env.reset(current_player_id=3, game_env=one_game)  # game_states=dataset['train'][8]['states'])
 target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
 states = torch.from_numpy(state).reshape(1, state_dim).float()
 actions = torch.zeros((0, act_dim)).float()
 rewards = torch.zeros(0).float()
 timesteps = torch.tensor(0).reshape(1, 1).long()
+
 
 # take steps in the environment (evaluation, not training)
 for t in range(MAX_EPISODE_LENGTH):
@@ -373,6 +383,9 @@ for t in range(MAX_EPISODE_LENGTH):
                         target_return,
                         timesteps)
 
+    soft_max = nn.Softmax(dim=0)
+    action = soft_max(action)
+
     print(f"action {t}: {action}")
     actions[-1] = action
     action = action.detach().numpy()
@@ -382,8 +395,6 @@ for t in range(MAX_EPISODE_LENGTH):
     action[-t:] = 0
 
     valid_actions = action[:MAX_EPISODE_LENGTH - t]
-
-    # TODO: mask to be only able to play legal cards
 
     # subset size of 6, wants to select a card already played/out of bounds: IndexError: list index out of range
 
@@ -409,3 +420,13 @@ for t in range(MAX_EPISODE_LENGTH):
 
     if done:
         break
+
+correct_actions = dataset["train"]["actions"][game_index]
+
+prob_each_act_correct = actions.detach().numpy() * correct_actions
+
+prob_correct_action = sum(sum(prob_each_act_correct)) / 12
+
+print(f"Avg probability of correct action: {prob_correct_action}")
+
+# TODO: check behaviour of rewards

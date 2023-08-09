@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from card_representation_conversion import convert_one_hot_to_card, convert_card_to_vector, convert_one_hot_to_vector
+from card_representation_conversion import convert_one_hot_to_card, convert_card_to_vector, \
+    convert_one_hot_to_vector
 from environment import Env, get_trump_enc
 
 from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
@@ -16,15 +17,15 @@ from game.state.game_state_play import PlayCardAction
 from model.player import Player
 from model.card import Card
 
-# position co-player (3) + trump (4) + last trick (3 * card_dim)
-# + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 92
-
 # actions are a vector which encodes the cards to select categorically
 act_dim = 12
 
 # cards are a vector, first 4 entries are a one-hot encoding of the suit, the fifth is the face encoded by an integer
 card_dim = 5
+
+# position co-player (3) + trump (4) + last trick (3 * card_dim)
+# + open cards (2 * card_dim) + hand cards (12 * card_dim)
+state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + 12 * card_dim
 
 
 def get_game(game="wc"):
@@ -107,7 +108,7 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
     if won:
         # add reward and player points as last reward
         rewards.append(current_player.current_trick_points + soloist_points)
-        actions.extend([0] * act_dim)
+        actions.append([0] * act_dim)
     else:
         # action of surrendering
         actions.append([-2] * act_dim)
@@ -170,6 +171,10 @@ def get_hand_cards(current_player, trick):
 def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewards=False, game_index=-1):
     meta_and_cards, skat_and_cs = get_game(game=championship)
 
+    # meta_and_cards = [meta_and_cards[game_index],]
+
+    # skat_and_cs = [skat_and_cs[game_index],]
+
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
     # -> pos_p
@@ -195,7 +200,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
     # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0
 
-    for game in tqdm(meta_and_cards[:amount_games, :]):
+    for game in tqdm(meta_and_cards[:amount_games, :]):  # meta_and_cards:
 
         for i in range(3):
 
@@ -217,9 +222,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # hand: binary encoding whether hand was played
             # soloist_points: points the soloist receives for playing a certain game
             player_id, trump, hand, soloist_points = game[-8], game[-7], game[-6], game[-5]
-
-            won = ((current_player is Player.Type.DECLARER) and game[-4]) or \
-                  ((current_player is Player.Type.DEFENDER) and not game[-4])
 
             # we fixate the player on an index in the data set and rotate over the index
             agent_player = game[i + 1]
@@ -294,6 +296,10 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     env.state_machine.handle_action(BidCallAction(current_player3, 18))
                     env.state_machine.handle_action(BidPassAction(current_player, 18))
                     env.state_machine.handle_action(BidPassAction(current_player2, 18))
+
+            won = ((current_player.type == Player.Type.DECLARER) and game[-4]) or \
+                  ((current_player.type == Player.Type.DEFENDER) and not game[-4])
+            # won = False
 
             # there is no card revealed during Skat putting
             # open_cards = [[0] * card_dim, [0] * card_dim]
@@ -452,7 +458,8 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     # if the player sits in the middle this trick
                     if env.game.trick.get_current_player() == current_player:
                         # in position of the second player, there is one open card
-                        open_cards = convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick - 1]) + [0] * card_dim
+                        open_cards = convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick - 1]) + [
+                            0] * card_dim
 
                         game_state += pos_p + trump_enc + last_trick + open_cards + get_hand_cards(current_player,
                                                                                                    trick)
@@ -510,6 +517,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # reward system:
             if point_rewards:
                 # if point_rewards add card points on top of achieved points...
+                # soloist points can be negative if she lost
                 if current_player.type == Player.Type.DECLARER:
                     # add the points to the soloist
                     rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
@@ -518,7 +526,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     rewards[-1] = -0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
             else:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games
-                rewards[-1] *= 1 if won else 0
+                rewards[-1] *= (1 if won else 0)
 
             # in the end of each game, insert the states, actions and rewards
             # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
@@ -527,7 +535,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # insert actions
             actions_table[3 * cs_index + i] = actions  # np.array_split([float(i) for i in actions], 12)
             # insert rewards
-            rewards_table[3 * cs_index + i] = [float(i) for i in rewards]
+            rewards_table[3 * cs_index + i] = [[i] for i in rewards]
             # np.array_split([float(i) for i in rewards], 12)
 
         cs_index = cs_index + 1
