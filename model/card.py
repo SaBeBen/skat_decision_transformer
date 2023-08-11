@@ -3,14 +3,43 @@ from enum import Enum
 
 class Card:
     class Face(Enum):
-        SEVEN = 0
-        EIGHT = 1
-        NINE = 2
-        TEN = 3
-        JACK = 4
-        QUEEN = 5
-        KING = 6
+        SEVEN = 1
+        EIGHT = 2
+        NINE = 3
+        QUEEN = 4
+        KING = 5
+        TEN = 6
         ACE = 7
+        JACK = 8
+
+        @staticmethod
+        def to_display(suit):
+            if suit is Card.Face.SEVEN:
+                return str(7)
+            elif suit is Card.Face.EIGHT:
+                return str(8)
+            elif suit is Card.Face.NINE:
+                return str(9)
+            elif suit is Card.Face.TEN:
+                return str(10)
+            elif suit is Card.Face.JACK:
+                return "J"
+            elif suit is Card.Face.QUEEN:
+                return "Q"
+            elif suit is Card.Face.KING:
+                return "K"
+            elif suit is Card.Face.ACE:
+                return "A"
+
+    class FaceNull(Enum):
+        SEVEN = 1
+        EIGHT = 2
+        NINE = 3
+        TEN = 4
+        JACK = 5
+        QUEEN = 6
+        KING = 7
+        ACE = 8
 
         @staticmethod
         def to_display(suit):

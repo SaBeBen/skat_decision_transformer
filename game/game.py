@@ -33,7 +33,7 @@ class Game:
             for player in self.players:
                 if player is not trick_winner:
                     # both players of the counterparty receive a negative reward
-                    player.current_trick_points = -current_trick_points
+                    player.current_trick_points = 0  # -current_trick_points
         else:
             for player in self.players:
                 if player is not self.get_declarer():
@@ -41,7 +41,7 @@ class Game:
                     player.current_trick_points = current_trick_points
                 else:
                     # the declarer receives a negative reward
-                    player.current_trick_points = -current_trick_points
+                    player.current_trick_points = 0  # -current_trick_points
 
         # add trick to players trick_stack
         trick_winner.trick_stack[self.round] = self.trick.stack
@@ -98,7 +98,18 @@ class Game:
             self.dealer = -1
 
     def get_last_trick_cards(self):
-        return self.last_trick_cards
+        if self.last_trick_cards is None:
+            raise ValueError("There is no last trick.")
+        else:
+            return self.last_trick_cards
+
+    def get_last_trick_points(self):
+        if self.round == 1:
+            return 0
+        elif self.last_trick_cards is None:
+            raise ValueError("There is no last trick.")
+        else:
+            return sum([card.get_value() for card in self.last_trick_cards])
 
     def get_round(self):
         return self.round

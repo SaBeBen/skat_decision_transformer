@@ -61,10 +61,10 @@ class GameVariantGrand(GameVariant):
             return self.compare_jacks(card_higher, card_lower)
         elif card_higher.suit is not card_lower.suit:
             return 0
-        elif card_higher.face is Card.Face.TEN and card_lower.face is not Card.Face.TEN:
-            return 1 if card_lower.face is not Card.Face.ACE else -1
-        elif card_higher.face is not Card.Face.TEN and card_lower.face is Card.Face.TEN:
-            return 1 if card_higher.face is Card.Face.ACE else -1
+        # elif card_higher.face is Card.Face.TEN and card_lower.face is not Card.Face.TEN:
+        #     return 1 if card_lower.face is not Card.Face.ACE else -1
+        # elif card_higher.face is not Card.Face.TEN and card_lower.face is Card.Face.TEN:
+        #     return 1 if card_higher.face is Card.Face.ACE else -1
         elif card_higher.face.value > card_lower.face.value:
             return 1
         elif card_higher.face.value < card_lower.face.value:

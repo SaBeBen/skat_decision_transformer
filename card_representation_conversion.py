@@ -122,7 +122,7 @@ def convert_card_to_cat_vector(card):
 
 
 def convert_card_to_one_hot(card):
-    vector_rep = {
+    card_rep = {
         Card(Card.Suit.CLUB, Card.Face.ACE): 1,  # A♣
         Card(Card.Suit.CLUB, Card.Face.KING): 2,  # K♣
         Card(Card.Suit.CLUB, Card.Face.QUEEN): 3,  # Q♣
@@ -156,7 +156,7 @@ def convert_card_to_one_hot(card):
         Card(Card.Suit.DIAMOND, Card.Face.EIGHT): 31,  # 8♦
         Card(Card.Suit.DIAMOND, Card.Face.SEVEN): 32  # 7♦
     }
-    converted_card = vector_rep[card]
+    converted_card = card_rep[card]
 
     return converted_card
 

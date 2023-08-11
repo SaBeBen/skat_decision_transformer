@@ -20,9 +20,12 @@ act_dim = 12
 
 card_dim = 5
 
+# for padding of hand_cards, it is the maximum size with a compressed card representation
+max_hand_len = 28
+
 # position co-player (3) + trump (4) + last trick (3 * card_dim)
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + 12 * card_dim
+state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
 
 
 # convert the trump from as commonly represented in one number to a (categorical) vector
@@ -252,12 +255,18 @@ class Env:
         open_cards = [0] * card_dim * 3
 
         hand_cards = []
+        last_card = None
         for card in self.current_player.cards:
-            hand_cards += convert_card_to_vector(card)
+            if last_card is not None and card.suit == last_card.suit:
+                hand_cards += [card.face.value]
+            else:
+                hand_cards += convert_card_to_vector(card)
+            last_card = card
+        hand_cards += [0] * (max_hand_len - len(hand_cards))
 
         # pad the Skat on the defenders hands if the agent is one
-        if current_player_id != soloist.get_id() or (current_player_id == soloist.get_id() and self.hand):
-            hand_cards += card_dim * [0] * 2
+        # if current_player_id != soloist.get_id() or (current_player_id == soloist.get_id() and self.hand):
+        #     hand_cards += card_dim * [0] * 2
 
         game_state = self.pos_p + self.trump_enc + last_trick + open_cards + hand_cards
 
@@ -314,11 +323,14 @@ class Env:
 
                 # update hand cards after the Skat putting
                 hand_cards = []
+                last_card = None
                 for card in self.current_player.cards:
-                    hand_cards += convert_card_to_vector(card)
-
-                # pad the put first Skat card
-                hand_cards += card_dim * [0]
+                    if last_card is not None and card.suit == last_card.suit:
+                        hand_cards += [card.face.value]
+                    else:
+                        hand_cards += convert_card_to_vector(card)
+                    last_card = card
+                hand_cards += [0] * (max_hand_len - len(hand_cards))
             else:
                 # update hand cards
                 hand_cards = []
@@ -355,14 +367,19 @@ class Env:
             # once a card is removed, is only the element removed and the list is shrunken -> order is still valid
             # self.current_player.cards.sort()
 
-            # update hand cards, after Skat was put
             hand_cards = []
+            last_card = None
             for card in self.current_player.cards:
-                hand_cards += convert_card_to_vector(card)
+                if last_card is not None and card.suit == last_card.suit:
+                    hand_cards += [card.face.value]
+                else:
+                    hand_cards += convert_card_to_vector(card)
+                last_card = card
+            hand_cards += [0] * (max_hand_len - len(hand_cards))
 
             # after Skat putting, every player has 10 cards which need to be padded
             # this state will be the third state, namely the one after Skat putting
-            hand_cards += card_dim * [0] * 2
+            # hand_cards += card_dim * [0] * 2
 
             last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
 
@@ -386,11 +403,17 @@ class Env:
 
                 # convert each card to the desired encoding
                 hand_cards = []
+                last_card = None
                 for card in self.current_player.cards:
-                    hand_cards += convert_card_to_vector(card)
+                    if last_card is not None and card.suit == last_card.suit:
+                        hand_cards += [card.face.value]
+                    else:
+                        hand_cards += convert_card_to_vector(card)
+                    last_card = card
+                hand_cards += [0] * (max_hand_len - len(hand_cards))
 
                 # pad the cards to a length of 12
-                hand_cards += card_dim * [0] * (self.trick + 2)
+                # hand_cards += card_dim * [0] * (self.trick + 2)
 
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
@@ -409,11 +432,17 @@ class Env:
 
                 # convert each card to the desired encoding
                 hand_cards = []
+                last_card = None
                 for card in self.current_player.cards:
-                    hand_cards += convert_card_to_vector(card)
+                    if last_card is not None and card.suit == last_card.suit:
+                        hand_cards += [card.face.value]
+                    else:
+                        hand_cards += convert_card_to_vector(card)
+                    last_card = card
+                hand_cards += [0] * (max_hand_len - len(hand_cards))
 
                 # pad the cards to a length of 12
-                hand_cards += card_dim * [0] * (self.trick + 2)
+                # hand_cards += card_dim * [0] * (self.trick + 2)
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
                 self.state_machine.handle_action(
@@ -432,11 +461,17 @@ class Env:
 
                 # convert each card to the desired encoding
                 hand_cards = []
+                last_card = None
                 for card in self.current_player.cards:
-                    hand_cards += convert_card_to_vector(card)
+                    if last_card is not None and card.suit == last_card.suit:
+                        hand_cards += [card.face.value]
+                    else:
+                        hand_cards += convert_card_to_vector(card)
+                    last_card = card
+                hand_cards += [0] * (max_hand_len - len(hand_cards))
 
                 # pad the cards to a length of 12
-                hand_cards += card_dim * [0] * (self.trick + 2)
+                # hand_cards += card_dim * [0] * (self.trick + 2)
 
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates

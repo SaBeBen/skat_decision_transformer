@@ -14,8 +14,8 @@ import environment
 game_index = 8
 
 print("Loading data...")
-data, one_game = data_pipeline.get_states_actions_rewards(amount_games=8,
-                                                          point_rewards=True,
+data, one_game = data_pipeline.get_states_actions_rewards(amount_games=10,
+                                                          point_rewards=False,
                                                           game_index=game_index)
 
 # %%
@@ -23,29 +23,66 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 
 # %%
 
+# FIXED: problem of context length max = 1024:
+
+# atm (each Skat as action, card_dim 5, cards on hand): episode length = 105 * 12 = 1260
+
+# problem at action 9 (10th action) (10 * 105 = 1050) (should select 3rd card, selects 1st):
+# tensor([0.2189, 0.1059, 0.1479, 0.0586, 0.0595, 0.0583, 0.0585, 0.0587, 0.0584, 0.0586, 0.0583, 0.0586])
+
+# Solution 1:
+# Skat as first last trick
+#   hand_cards -= 2, 2 s, a, r less
+#   state_dim = -> 82
+#   episode length = (82 + 12 + 1) * 10 = 950
+
+#   But what if we want to encode the Skat as two separate actions?
+
+# Solution 2:
+# compress card representation with sorting by suit and further identifying by face
+# example: [0, 1, 0, 0, 1, 5, 7, 8, 0, 0, 0, 0]
+#   -> spades 7, K, A, J, missing: 8, 9, Q, 10
+#   size per colour with padding -> 4 + 8 = 12
+#   size of whole hand 12 * 4 = 48
+#   state size = 3 + 4 + 3 * 5 + 2 * 5 + 48 = 80
+#   episode: (s + a + r) * 12 = (80 + 12 + 1) * 12 = 1116
+#   episode with Skat as first last trick: 93 * 10 = 930
+
+# Solution 3: currently used
+# Solution 2 + further compressing: do not pad the suits, only pad up to the max possible state length
+#   max_hand_length = 16 (encoding of colours) + 12 (all cards) = 28
+# pad with zeros
+# Example 1:
+# [1, 0, 0, 0, 1, 5, 7, 8], [0, 1, 0, 0, 1, 5],
+# [0, 0, 1, 0, 2, 3, 4], [0, 0, 0, 1, 1, 3, 8]
+# Example 2:
+# [1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8], [0] * (max_hand_length - 12)
+#
+#   state size = 3 + 4 + 3 * 5 + 2 * 5 + 28 = 60
+#   episode length: (s + a + r) * 12 = (60 + 12 + 1) * 12 = 876
+
+# Solution 4 (respects problem with loss function):
+# Solution 3, but solely with one-hot encoded cards
+#   hand_length = 4 * 12 = 48
+# Example 1:
+# [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1], [0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+# [0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0], [0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1]
+#
+#   state size = 3 + 4 + 3 * 5 + 2 * 5 + 48 = 80
+#   episode length: (s + a + r) * 12 = (80 + 12 + 1) * 12 = 1116
+
 act_dim = 12
 card_dim = 5
 
+# for padding of hand_cards, it is the maximum size with a compressed card representation
+max_hand_len = 28
+
 # position co-player (3) + trump (4) + last trick (3 * card_dim)
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + 12 * card_dim
+state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
+
 
 # device = torch.device("cuda") # "cpu"
-
-
-def get_batch_ind():  # game_length
-    # picks game indices
-    # this picks the same game over *times* times
-    # (WC GameID 4: Agent sits in rear hand as soloist)
-    times = 32
-    return np.tile(np.arange(8, 9), times)
-
-    # return np.random.choice(
-    #     np.arange(n_traj),
-    #     size=batch_size,
-    #     replace=True,
-    #     p=p_sample,  # reweights, so we sample according to timesteps
-    # )
 
 
 # adapted from https://huggingface.co/blog/train-decision-transformers
@@ -61,11 +98,13 @@ class DecisionTransformerSkatDataCollator:
     state_std: np.array = None  # to store state stds
     p_sample: np.array = None  # a distribution to take account trajectory lengths
     n_traj: int = 0  # to store the number of trajectories in the dataset TODO: do we need this?
+    games_ind: tuple = (0, 0)
 
-    def __init__(self, dataset) -> None:
+    def __init__(self, dataset, games_ind) -> None:
         self.act_dim = len(dataset[0]["actions"][0])
         self.state_dim = len(dataset[0]["states"][0])
         self.dataset = dataset
+        self.games_ind = games_ind
         # calculate dataset stats for normalization of states
         states = []
         traj_lens = []
@@ -79,6 +118,20 @@ class DecisionTransformerSkatDataCollator:
         traj_lens = np.array(traj_lens)
         self.p_sample = traj_lens / sum(traj_lens)
 
+    def get_batch_ind(self):  # game_length
+        # picks game indices
+        # this picks the same game over *times* times
+        # (WC GameID 4: Agent sits in rear hand as soloist)
+        times = 32
+        return np.tile(np.arange(self.games_ind[0], self.games_ind[1]), times)
+
+        # return np.random.choice(
+        #     np.arange(n_traj),
+        #     size=batch_size,
+        #     replace=True,
+        #     p=p_sample,  # reweights, so we sample according to timesteps
+        # )
+
     def _discount_cumsum(self, x, gamma):
         # weighted rewards are in the data set (get_states_actions_rewards)
         discount_cumsum = np.zeros_like(x)
@@ -88,7 +141,7 @@ class DecisionTransformerSkatDataCollator:
         return discount_cumsum
 
     def __call__(self, features):
-        batch_size = len(features)
+        batch_size = 32  # len(features)
 
         # Done: We want one game as a whole in a batch v
         # Done: normalization v
@@ -96,7 +149,7 @@ class DecisionTransformerSkatDataCollator:
         # Done: scale rewards
         # Done: find a suit game which is easily won v
 
-        batch_inds = get_batch_ind()  # self.state_dim * self.max_ep_len
+        batch_inds = self.get_batch_ind()  # self.state_dim * self.max_ep_len
 
         # this is a bit of a hack to be able to sample of a non-uniform distribution
         # we have a random pick of the data as a batch without controlling the shape,
@@ -222,9 +275,8 @@ configuration = DecisionTransformerConfig(state_dim=state_dim,  # each state con
                                           )
 # TODO: how is the vocabulary defined?
 
-# model = DecisionTransformerModel(configuration)
 
-collator = DecisionTransformerSkatDataCollator(dataset["train"])
+collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=(8, 9))
 
 config = DecisionTransformerConfig(state_dim=collator.state_dim, act_dim=collator.act_dim)
 model = TrainableDT(config)
@@ -252,7 +304,7 @@ trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=dataset["train"],
-    # eval_dataset=dataset["train"][8], # TODO: anderes Spiel
+    # eval_dataset=dataset["train"][8],  # TODO: anderes Spiel
     data_collator=collator,
     # callbacks=[tensorboard_callback]
 )
@@ -367,7 +419,6 @@ states = torch.from_numpy(state).reshape(1, state_dim).float()
 actions = torch.zeros((0, act_dim)).float()
 rewards = torch.zeros(0).float()
 timesteps = torch.tensor(0).reshape(1, 1).long()
-
 
 # take steps in the environment (evaluation, not training)
 for t in range(MAX_EPISODE_LENGTH):
