@@ -11,10 +11,12 @@ import data_pipeline
 import environment
 
 # %%
-game_index = 8
+game_index = 7
+
+games = (0, 128)
 
 print("Loading data...")
-data, one_game = data_pipeline.get_states_actions_rewards(amount_games=10,
+data, one_game = data_pipeline.get_states_actions_rewards(amount_games=games[1],
                                                           point_rewards=False,
                                                           game_index=game_index)
 
@@ -79,7 +81,7 @@ max_hand_len = 28
 
 # position co-player (3) + trump (4) + last trick (3 * card_dim)
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
+state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
 
 
 # device = torch.device("cuda") # "cpu"
@@ -122,15 +124,8 @@ class DecisionTransformerSkatDataCollator:
         # picks game indices
         # this picks the same game over *times* times
         # (WC GameID 4: Agent sits in rear hand as soloist)
-        times = 32
+        times = 1
         return np.tile(np.arange(self.games_ind[0], self.games_ind[1]), times)
-
-        # return np.random.choice(
-        #     np.arange(n_traj),
-        #     size=batch_size,
-        #     replace=True,
-        #     p=p_sample,  # reweights, so we sample according to timesteps
-        # )
 
     def _discount_cumsum(self, x, gamma):
         # weighted rewards are in the data set (get_states_actions_rewards)
@@ -142,12 +137,6 @@ class DecisionTransformerSkatDataCollator:
 
     def __call__(self, features):
         batch_size = 32  # len(features)
-
-        # Done: We want one game as a whole in a batch v
-        # Done: normalization v
-        # Done: rtg, timesteps and mask v
-        # Done: scale rewards
-        # Done: find a suit game which is easily won v
 
         batch_inds = self.get_batch_ind()  # self.state_dim * self.max_ep_len
 
@@ -201,7 +190,7 @@ class DecisionTransformerSkatDataCollator:
             # s[-1] = (s[-1] - self.state_mean) / self.state_std
 
             a[-1] = np.concatenate(
-                [np.ones((1, self.max_len - tlen, self.act_dim)) * -10.0, a[-1]],
+                [np.zeros((1, self.max_len - tlen, self.act_dim)), a[-1]],
                 axis=1,
             )
             r[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), r[-1]], axis=1)
@@ -253,6 +242,7 @@ class TrainableDT(DecisionTransformerModel):
         cross_ent_fct = nn.CrossEntropyLoss()
 
         # soft_max_fct = nn.Softmax(1)  # TODO: softmax
+        # soft_maxed = soft_max_fct(action_preds)
 
         cross_ent_loss = cross_ent_fct(action_preds, action_targets)
 
@@ -267,18 +257,18 @@ class TrainableDT(DecisionTransformerModel):
         return super().forward(**kwargs)
 
 
-configuration = DecisionTransformerConfig(state_dim=state_dim,  # each state consist out of
-                                          act_dim=act_dim,  # each action consists out of one played card ()
-                                          max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
-                                          vocab_size=32,  # there are 32 cards + pos_tp + trump_enc + surrender
-                                          # TODO: other encodings (like pos_tp)?
-                                          )
+collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=games)
+
+config = DecisionTransformerConfig(
+    state_dim=collator.state_dim,
+    act_dim=collator.act_dim,
+    action_tanh=False,
+    activation_function="tanh",
+    max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
+    vocab_size=35,  # there are 32 cards + pos_tp + score +  + trump_enc
+)
 # TODO: how is the vocabulary defined?
 
-
-collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=(8, 9))
-
-config = DecisionTransformerConfig(state_dim=collator.state_dim, act_dim=collator.act_dim)
 model = TrainableDT(config)
 
 # model.to(device)
@@ -289,9 +279,9 @@ training_args = TrainingArguments(
     report_to=["tensorboard"],
     output_dir="training_output/",
     remove_unused_columns=False,
-    num_train_epochs=500,
+    num_train_epochs=250,
     per_device_train_batch_size=64,
-    learning_rate=1e-4,
+    learning_rate=1e-2,
     weight_decay=1e-4,
     warmup_ratio=0.1,
     optim="adamw_torch",
@@ -413,7 +403,7 @@ state_mean = torch.from_numpy(state_mean).to(device="cpu")
 state_std = torch.from_numpy(state_std).to(device="cpu")
 
 # build the environment for the evaluation
-state = env.reset(current_player_id=3, game_env=one_game)  # game_states=dataset['train'][8]['states'])
+state = env.reset(current_player_id=2, game_env=one_game)  # game_states=dataset['train'][8]['states'])
 target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
 states = torch.from_numpy(state).reshape(1, state_dim).float()
 actions = torch.zeros((0, act_dim)).float()
@@ -459,7 +449,9 @@ for t in range(MAX_EPISODE_LENGTH):
     action[card_index] = 1
 
     # interact with the environment based on this action
-    state, reward, done = env.step(tuple(action))  # TODO
+    state, reward, done = env.step(tuple(action))
+
+    print(f"Reward: {reward}")
 
     cur_state = torch.from_numpy(state).reshape(1, state_dim)
     states = torch.cat([states, cur_state], dim=0)

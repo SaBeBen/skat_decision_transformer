@@ -25,7 +25,7 @@ max_hand_len = 28
 
 # position co-player (3) + trump (4) + last trick (3 * card_dim)
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 3 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
+state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
 
 
 # convert the trump from as commonly represented in one number to a (categorical) vector
@@ -43,7 +43,7 @@ def get_trump_enc(trump, enc="cat"):
 # calculates the win probability solely based on the starting hand cards of a player
 # a game is considered winnable if the kinback score of the own cards is at least 8.5 points
 def calculate_kinback_scheme(hand_cards, pos):
-    score = 0
+    kb_score = 0
 
     # hand cards are sorted by colours and value
     # we want to find out the most promising suit
@@ -63,7 +63,7 @@ def calculate_kinback_scheme(hand_cards, pos):
     # each trump guaranteed to win a trick is worth 1 point
     # in a suit game, there are 11 trump cards -> if you have 6 or more trump cards,
     # you are guaranteed to win trumps - (11 - trumps) tricks
-    score += score - (11 - score) if score >= 6 else 0
+    kb_score += kb_score - (11 - kb_score) if kb_score >= 6 else 0
 
     non_trump_suits = [0, 0, 0, 0]
     # i = 0
@@ -115,7 +115,7 @@ def calculate_kinback_scheme(hand_cards, pos):
 
     # when sitting in forehand -> 0.5 points
     if pos == 1:
-        score += 0.5
+        kb_score += 0.5
 
     # trump = trump_suits.index(max(trump_suits))
     highest_score = 0
@@ -123,13 +123,27 @@ def calculate_kinback_scheme(hand_cards, pos):
 
     # determine the best trump suit by calculating the Kinback score for every suit (indexed by eval_trump)
     for eval_trump in range(4):
-        score = non_trump_suits[(eval_trump + 1) % 4] + non_trump_suits[(eval_trump + 2) % 4] + \
-                non_trump_suits[(eval_trump + 3) % 4] + trump_suits[eval_trump]
-        if score >= highest_score:
-            highest_score = score
+        kb_score = non_trump_suits[(eval_trump + 1) % 4] + non_trump_suits[(eval_trump + 2) % 4] + \
+                   non_trump_suits[(eval_trump + 3) % 4] + trump_suits[eval_trump]
+        if kb_score >= highest_score:
+            highest_score = kb_score
             trump = eval_trump
 
-    return score, trump + 9
+    return kb_score, trump + 9
+
+
+def get_hand_cards(current_player):
+    hand_cards = []
+    last_card = None
+    for card in current_player.cards:
+        if last_card is not None and card.suit == last_card.suit:
+            hand_cards += [card.face.value]
+        else:
+            hand_cards += convert_card_to_vector(card)
+        last_card = card
+    hand_cards += [0] * (max_hand_len - len(hand_cards))
+
+    return hand_cards
 
 
 class Env:
@@ -153,6 +167,7 @@ class Env:
         self.skat_down = []
         self.pos_p = None
         self.trump_enc = None
+        self.score = [0, 0]
 
         self.current_player = None
         self.skat_put = [False, False]
@@ -163,7 +178,7 @@ class Env:
         return self.state
 
     def get_game_points(self):
-        game_points = 0
+        game_points = 94
         # TODO: check the game variant
         # self.trump_enc
         # TODO: chekc if hand was played
@@ -193,12 +208,13 @@ class Env:
             for player in self.game.players:
                 i += 1
                 # lets the player with the best scoring cards play
-                score, trump_player = calculate_kinback_scheme(player.cards, i)
-                if score > highest_score:
-                    highest_score = score
+                kb_score, trump_player = calculate_kinback_scheme(player.cards, i)
+                if kb_score > highest_score:
+                    highest_score = kb_score
                     soloist = player
                     trump = trump_player
 
+            self.current_player = soloist
             # soloist.type = Player.Type.DECLARER
             self.state_machine.handle_action(BidCallAction(soloist, 18))
             self.state_machine.handle_action(
@@ -254,21 +270,13 @@ class Env:
         # get the open cards and convert them to the card representation
         open_cards = [0] * card_dim * 3
 
-        hand_cards = []
-        last_card = None
-        for card in self.current_player.cards:
-            if last_card is not None and card.suit == last_card.suit:
-                hand_cards += [card.face.value]
-            else:
-                hand_cards += convert_card_to_vector(card)
-            last_card = card
-        hand_cards += [0] * (max_hand_len - len(hand_cards))
+        hand_cards = get_hand_cards(self.current_player)
 
         # pad the Skat on the defenders hands if the agent is one
         # if current_player_id != soloist.get_id() or (current_player_id == soloist.get_id() and self.hand):
         #     hand_cards += card_dim * [0] * 2
 
-        game_state = self.pos_p + self.trump_enc + last_trick + open_cards + hand_cards
+        game_state = self.pos_p + self.score + self.trump_enc + last_trick + open_cards + hand_cards
 
         self.state = game_state
 
@@ -312,6 +320,9 @@ class Env:
                     # add the card value of second Skat card as reward
                     reward = Card.get_value(self.skat_down[0])
 
+                    self.score[0] = Card.get_value(self.skat_down[0])
+                    # TODO: self.game.skat instead of init in data pipeline, in general: optimize variables
+
                 try:
                     self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[0]))
                 except ValueError:
@@ -320,25 +331,6 @@ class Env:
                         f"The hand cards are {self.current_player.cards}")
 
                 self.current_player.cards.sort()
-
-                # update hand cards after the Skat putting
-                hand_cards = []
-                last_card = None
-                for card in self.current_player.cards:
-                    if last_card is not None and card.suit == last_card.suit:
-                        hand_cards += [card.face.value]
-                    else:
-                        hand_cards += convert_card_to_vector(card)
-                    last_card = card
-                hand_cards += [0] * (max_hand_len - len(hand_cards))
-            else:
-                # update hand cards
-                hand_cards = []
-                for card in self.current_player.cards:
-                    hand_cards += convert_card_to_vector(card)
-
-                # pad both Skat cards
-                hand_cards += card_dim * [0] * 2
 
             last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
 
@@ -354,8 +346,11 @@ class Env:
                 if self.current_player is self.game.get_declarer():
                     # second Skat card as action
                     self.skat_down.append(self.current_player.cards[card_index.index(1)])
+
                     # add the card value of second Skat card as reward
                     reward = Card.get_value(self.skat_down[1])
+
+                    self.score[0] = Card.get_value(self.skat_down[1])
 
                 try:
                     self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[1]))
@@ -364,22 +359,8 @@ class Env:
                         f"Player {self.current_player.get_id()} is not holding card {self.skat_down[1]}! "
                         f"The hand cards are {self.current_player.cards}")
 
-            # once a card is removed, is only the element removed and the list is shrunken -> order is still valid
-            # self.current_player.cards.sort()
-
-            hand_cards = []
-            last_card = None
-            for card in self.current_player.cards:
-                if last_card is not None and card.suit == last_card.suit:
-                    hand_cards += [card.face.value]
-                else:
-                    hand_cards += convert_card_to_vector(card)
-                last_card = card
-            hand_cards += [0] * (max_hand_len - len(hand_cards))
-
             # after Skat putting, every player has 10 cards which need to be padded
             # this state will be the third state, namely the one after Skat putting
-            # hand_cards += card_dim * [0] * 2
 
             last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
 
@@ -401,26 +382,11 @@ class Env:
                 # in position of first player, there are no open cards
                 open_cards = [0] * card_dim + [0] * card_dim
 
-                # convert each card to the desired encoding
-                hand_cards = []
-                last_card = None
-                for card in self.current_player.cards:
-                    if last_card is not None and card.suit == last_card.suit:
-                        hand_cards += [card.face.value]
-                    else:
-                        hand_cards += convert_card_to_vector(card)
-                    last_card = card
-                hand_cards += [0] * (max_hand_len - len(hand_cards))
-
-                # pad the cards to a length of 12
-                # hand_cards += card_dim * [0] * (self.trick + 2)
-
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
                 self.state_machine.handle_action(
                     PlayCardAction(player=self.game.trick.get_current_player(),
                                    card=convert_one_hot_to_card(self.skat_and_cs[3 * self.trick - 1])))
-                # TODO: Due to the wrong card being played, the order changes, so the wrong player tries to play a card
 
             # if the player sits in the middle this trick
             if self.game.trick.get_current_player() == self.current_player:
@@ -430,19 +396,6 @@ class Env:
                 # in position of the second player, there is one open card
                 open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick - 1]) + [0] * card_dim
 
-                # convert each card to the desired encoding
-                hand_cards = []
-                last_card = None
-                for card in self.current_player.cards:
-                    if last_card is not None and card.suit == last_card.suit:
-                        hand_cards += [card.face.value]
-                    else:
-                        hand_cards += convert_card_to_vector(card)
-                    last_card = card
-                hand_cards += [0] * (max_hand_len - len(hand_cards))
-
-                # pad the cards to a length of 12
-                # hand_cards += card_dim * [0] * (self.trick + 2)
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
                 self.state_machine.handle_action(
@@ -458,21 +411,6 @@ class Env:
                 open_cards = convert_one_hot_to_vector(
                     self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
                     self.skat_and_cs[3 * self.trick])
-
-                # convert each card to the desired encoding
-                hand_cards = []
-                last_card = None
-                for card in self.current_player.cards:
-                    if last_card is not None and card.suit == last_card.suit:
-                        hand_cards += [card.face.value]
-                    else:
-                        hand_cards += convert_card_to_vector(card)
-                    last_card = card
-                hand_cards += [0] * (max_hand_len - len(hand_cards))
-
-                # pad the cards to a length of 12
-                # hand_cards += card_dim * [0] * (self.trick + 2)
-
             else:
                 # iterates over players, each time PlayCardAction is called the role of the current player rotates
                 self.state_machine.handle_action(
@@ -484,15 +422,15 @@ class Env:
                 self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
                 self.skat_and_cs[3 * self.trick]) + convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick + 1])
 
-        # game_state = np.concatenate([self.pos_p, self.trump_enc, last_trick, open_cards, hand_cards], axis=None)
-        game_state = self.pos_p + self.trump_enc + last_trick + open_cards + hand_cards
+            reward = self.current_player.current_trick_points
 
-        self.state = game_state
-
-        reward = self.current_player.current_trick_points
+        self.score[1] += self.game.get_last_trick_points() if self.current_player.current_trick_points == 0 else 0
+        self.score[0] += self.current_player.current_trick_points
 
         # TODO: get game_points
         if done:
+            if self.current_player.type != Player.Type.DECLARER:
+                self.score[1] += Card.get_value(self.skat_down[0]) + Card.get_value(self.skat_down[1])
             game_points = self.get_game_points()
 
             if self.hand:
@@ -510,6 +448,10 @@ class Env:
             else:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games
                 reward *= 1 if game_points > 0 else 0
+
+        game_state = self.pos_p + self.score + self.trump_enc + last_trick + open_cards + get_hand_cards(self.current_player)
+
+        self.state = game_state
 
         # Return state, reward, done
         return np.array(game_state), reward, done

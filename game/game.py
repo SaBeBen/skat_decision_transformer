@@ -107,7 +107,8 @@ class Game:
         if self.round == 1:
             return 0
         elif self.last_trick_cards is None:
-            raise ValueError("There is no last trick.")
+            return 0
+            # raise ValueError("There is no last trick.")
         else:
             return sum([card.get_value() for card in self.last_trick_cards])
 
