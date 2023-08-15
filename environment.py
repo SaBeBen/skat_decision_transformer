@@ -232,21 +232,19 @@ class Env:
             # state of game after Skat was picked up is used
             self.game = game_env.game
             self.state_machine = game_env.state_machine
+            self.skat_down = game_env.skat_down
             self.skat_and_cs = game_env.skat_and_cs
             self.player1 = game_env.player1
             self.player2 = game_env.player2
             self.player3 = game_env.player3
 
-            soloist = self.game.get_declarer()
-            trump = self.game.game_variant.get_trump()
-
         # determine the position of players
         pos_p = [0, 0, 0]
 
-        if soloist.get_id() == current_player_id:
+        if self.game.get_declarer().get_id() == current_player_id:
             # initialise positions of defender as -1
             pos_p[(current_player_id + 1) % 3], pos_p[(current_player_id + 2) % 3] = -1, -1
-        elif soloist.get_id() == (current_player_id + 1 % 3):
+        elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
             pos_p[(current_player_id + 1) % 3] = -1
             pos_p[(current_player_id + 2) % 3] = 1
         else:
@@ -257,7 +255,7 @@ class Env:
         self.pos_p = pos_p
 
         # get the current trump
-        self.trump_enc = get_trump_enc(trump)
+        self.trump_enc = get_trump_enc(self.game.game_variant.get_trump())
 
         # set the current player on the copied environment
         self.current_player = self.game.players[current_player_id - 1]

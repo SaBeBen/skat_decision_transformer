@@ -330,8 +330,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 # if a single game is selected for evaluation, create a deep copy of it directly after Skat pick up
                 if game_index == 3 * cs_index + i:
                     fs_one_game = copy.deepcopy(env)
-                    fs_one_game.skat_up = skat_up
-                    fs_one_game.skat_down = skat_down
+                    # fs_one_game.skat_up = skat_up
                     fs_one_game.skat_and_cs = skat_and_cs[cs_index]
                     # fs_one_game.suit = trump
 
@@ -409,7 +408,6 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                 # if a single game is selected for evaluation, create a deep copy of it
                 if game_index == 3 * cs_index + i:
                     fs_one_game = copy.deepcopy(env)
-                    fs_one_game.skat_down = skat_down
                     fs_one_game.hand = True
                     fs_one_game.skat_and_cs = skat_and_cs[cs_index]
                     # fs_one_game.suit = trump
@@ -436,6 +434,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
             # safe the game variant for the evaluated game
             if game_index == 3 * cs_index + i:
                 fs_one_game.game.game_variant = env.game.game_variant
+                fs_one_game.skat_down = copy.deepcopy(skat_down)
 
             # if the game is surrendered instantly
             if surrendered_trick == 0:

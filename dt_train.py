@@ -1,5 +1,6 @@
 import random
 from dataclasses import dataclass
+
 import numpy as np
 import torch
 from datasets import Dataset, DatasetDict
@@ -7,13 +8,15 @@ from torch import nn
 from torch import Tensor
 
 from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
+from transformers.integrations import TensorBoardCallback
+
 import data_pipeline
 import environment
 
 # %%
 game_index = 7
 
-games = (0, 128)
+games = (7, 8)  # (0, 128)
 
 print("Loading data...")
 data, one_game = data_pipeline.get_states_actions_rewards(amount_games=games[1],
@@ -25,9 +28,9 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 
 # %%
 
-# FIXED: problem of context length max = 1024:
+# FIXED: problem of context length max = 1024: see Solution 3
 
-# atm (each Skat as action, card_dim 5, cards on hand): episode length = 105 * 12 = 1260
+# atm of Problem (each Skat as action, card_dim 5, cards on hand): episode length = 105 * 12 = 1260
 
 # problem at action 9 (10th action) (10 * 105 = 1050) (should select 3rd card, selects 1st):
 # tensor([0.2189, 0.1059, 0.1479, 0.0586, 0.0595, 0.0583, 0.0585, 0.0587, 0.0584, 0.0586, 0.0583, 0.0586])
@@ -36,7 +39,7 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 # Skat as first last trick
 #   hand_cards -= 2, 2 s, a, r less
 #   state_dim = -> 82
-#   episode length = (82 + 12 + 1) * 10 = 950
+#   episode length = (82 + 12 + 1) * 10 = 950 v
 
 #   But what if we want to encode the Skat as two separate actions?
 
@@ -48,7 +51,7 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 #   size of whole hand 12 * 4 = 48
 #   state size = 3 + 4 + 3 * 5 + 2 * 5 + 48 = 80
 #   episode: (s + a + r) * 12 = (80 + 12 + 1) * 12 = 1116
-#   episode with Skat as first last trick: 93 * 10 = 930
+#   episode with Skat as first last trick: 93 * 10 = 930 v
 
 # Solution 3: currently used
 # Solution 2 + further compressing: do not pad the suits, only pad up to the max possible state length
@@ -61,7 +64,7 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 # [1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8], [0] * (max_hand_length - 12)
 #
 #   state size = 3 + 4 + 3 * 5 + 2 * 5 + 28 = 60
-#   episode length: (s + a + r) * 12 = (60 + 12 + 1) * 12 = 876
+#   episode length: (s + a + r) * 12 = (60 + 12 + 1) * 12 = 876 v
 
 # Solution 4 (respects problem with loss function):
 # Solution 3, but solely with one-hot encoded cards
@@ -71,7 +74,7 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 # [0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0], [0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1]
 #
 #   state size = 3 + 4 + 3 * 5 + 2 * 5 + 48 = 80
-#   episode length: (s + a + r) * 12 = (80 + 12 + 1) * 12 = 1116
+#   episode length: (s + a + r) * 12 = (80 + 12 + 1) * 12 = 1116  x
 
 act_dim = 12
 card_dim = 5
@@ -90,7 +93,7 @@ state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_
 # adapted from https://huggingface.co/blog/train-decision-transformers
 @dataclass
 class DecisionTransformerSkatDataCollator:
-    return_tensors: str = "pt"
+    return_tensors: str = "pt"  # pytorch
     max_len: int = 12  # subsets of the episode we use for training, our episode length is short
     state_dim: int = state_dim  # size of state space
     act_dim: int = act_dim  # size of action space
@@ -124,7 +127,7 @@ class DecisionTransformerSkatDataCollator:
         # picks game indices
         # this picks the same game over *times* times
         # (WC GameID 4: Agent sits in rear hand as soloist)
-        times = 1
+        times = 32
         return np.tile(np.arange(self.games_ind[0], self.games_ind[1]), times)
 
     def _discount_cumsum(self, x, gamma):
@@ -232,29 +235,89 @@ class TrainableDT(DecisionTransformerModel):
         action_preds = action_preds.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
         action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
 
-        # mse
-        # loss = torch.mean((action_preds - action_targets) ** 2)
-
-        # L-2 norm
-        # loss = torch.linalg.norm(action_preds - action_targets, ord=2)
-
         # cross entropy loss
         cross_ent_fct = nn.CrossEntropyLoss()
 
         # soft_max_fct = nn.Softmax(1)  # TODO: softmax
         # soft_maxed = soft_max_fct(action_preds)
 
+        # not possible due to parallel processing
+        # # differs between 12 and 10 hand cards for defenders or hand games
+        # hand_len = 12 if any(action_targets[0, 0, :]) else 10
+        #
+        # prob_each_act_correct = action_pred_sm * correct_actions
+        #
+        # prob_correct_action = sum(sum(prob_each_act_correct[12 - hand_len:])) / hand_len
+
         cross_ent_loss = cross_ent_fct(action_preds, action_targets)
 
         loss = cross_ent_loss
 
+        soft_max = nn.Softmax(dim=0)
+        action_pred_sm = soft_max(action_preds)
+
+        prob_each_act_correct = action_pred_sm * action_targets
+
+        prob_correct_action = sum(sum(prob_each_act_correct)) / action_preds.shape[0]
+
+        # problem of double logging. _maybe_log_save_evaluate logs already, but does not get passed additional metrics
+        # logs: Dict[str, float] = {}
+        # logs =
+        # self.log()
+
         # manual logging
         # writer.add_scalar("Loss/train", loss,)  # problem: get episode
 
-        return {"loss": loss}
+        return {"loss": loss, "probability of correct action": prob_correct_action}  # loss, prob_correct_action
 
     def original_forward(self, **kwargs):
         return super().forward(**kwargs)
+
+
+# class CustomDTTrainer(Trainer):
+    # def compute_loss(self, model, inputs, return_outputs=False):
+    #     if self.label_smoother is not None and "labels" in inputs:
+    #         labels = inputs.pop("labels")
+    #     else:
+    #         labels = None
+    #     outputs = model(**inputs)
+    #     # Save past state if it exists
+    #     # TODO: this needs to be fixed and made cleaner later.
+    #     if self.args.past_index >= 0:
+    #         self._past = outputs[self.args.past_index]
+    #
+    #     if labels is not None:
+    #         from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
+    #         if unwrap_model(model)._get_name() in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+    #             loss = self.label_smoother(outputs, labels, shift_labels=True)
+    #         else:
+    #             loss = self.label_smoother(outputs, labels)
+    #     else:
+    #         if isinstance(outputs, dict) and "loss" not in outputs:
+    #             raise ValueError(
+    #                 "The model did not return a loss from the inputs, only the following keys: "
+    #                 f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+    #             )
+    #         # We don't use .loss here since the model may return tuples instead of ModelOutput.
+    #         loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+    #
+    #     # logger.
+    #
+    #     return (loss, outputs) if return_outputs else loss
+
+# def compute_metrics(eval_preds):
+#     metric = evaluate.load("accuracy")
+#     predictions = np.argmax(eval_preds.predictions, axis=1)
+#     return metric.compute(predictions=predictions, references=eval_preds.label_ids)
+
+
+# class OwnTensorboardCallback(TensorBoardCallback):
+# class OwnCallback(TensorBoardCallback):
+#     def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+#         if state.is_local_process_zero:
+#             print(logs)
+
+
 
 
 collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=games)
@@ -262,7 +325,7 @@ collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=games
 config = DecisionTransformerConfig(
     state_dim=collator.state_dim,
     act_dim=collator.act_dim,
-    action_tanh=False,
+    action_tanh=False,  # do not apply the tanh fct on the output action
     activation_function="tanh",
     max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
     vocab_size=35,  # there are 32 cards + pos_tp + score +  + trump_enc
@@ -274,28 +337,35 @@ model = TrainableDT(config)
 # model.to(device)
 
 # logging_files_name = "dt_training_{}_{}.log"
+label_names = ["states", "actions", "rewards", "returns_to_go", "timesteps", "attention_mask"]
 
 training_args = TrainingArguments(
     report_to=["tensorboard"],
     output_dir="training_output/",
     remove_unused_columns=False,
-    num_train_epochs=250,
+    num_train_epochs=240,
     per_device_train_batch_size=64,
-    learning_rate=1e-2,
-    weight_decay=1e-4,
-    warmup_ratio=0.1,
+    learning_rate=1e-3,
+    # weight_decay=1e-4,
+    # warmup_ratio=0.1,
     optim="adamw_torch",
     max_grad_norm=0.25,
     logging_steps=10,
+    evaluation_strategy="steps",
+    eval_steps=50,
     logging_dir="./training-logs",
+    do_eval=True
+    # no_cuda=True,
+    # label_names=label_names
 )
 
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=dataset["train"],
-    # eval_dataset=dataset["train"][8],  # TODO: anderes Spiel
+    eval_dataset=dataset["train"],  # TODO: anderes Spiel
     data_collator=collator,
+    # compute_metrics=compute_metrics
     # callbacks=[tensorboard_callback]
 )
 
@@ -341,13 +411,14 @@ trainer.train()
 # select available cudas for faster matrix computation
 # device = torch.device("cuda")
 
-TARGET_RETURN = 102
-
-# evaluation
 model = model.to("cpu")
+
+# trainer.evaluate(dataset["train"])
+
 model.eval()
 
-env = environment.Env()
+
+# env = environment.Env()
 
 
 # Function that gets an action from the model using autoregressive prediction
@@ -402,8 +473,13 @@ state_std = collator.state_std.astype(np.float32)
 state_mean = torch.from_numpy(state_mean).to(device="cpu")
 state_std = torch.from_numpy(state_std).to(device="cpu")
 
+# env = environment.Env() if one_game is None else one_game
+env = environment.Env()
+
+TARGET_RETURN = 60
+
 # build the environment for the evaluation
-state = env.reset(current_player_id=2, game_env=one_game)  # game_states=dataset['train'][8]['states'])
+state = env.reset(current_player_id=(game_index % 3) + 1, game_env=one_game)  # game_states=dataset['train'][8]['states'])
 target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
 states = torch.from_numpy(state).reshape(1, state_dim).float()
 actions = torch.zeros((0, act_dim)).float()
@@ -437,10 +513,6 @@ for t in range(MAX_EPISODE_LENGTH):
 
     valid_actions = action[:MAX_EPISODE_LENGTH - t]
 
-    # subset size of 6, wants to select a card already played/out of bounds: IndexError: list index out of range
-
-    # when increasing the subset size from 6 to 12, 2nd Skat is put wrongly and Agent wants to make an invalid move
-
     # get the index of the card with the highest probability
     card_index = np.argmax(valid_actions)
 
@@ -462,14 +534,26 @@ for t in range(MAX_EPISODE_LENGTH):
     timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
 
     if done:
+        # for evaluation of unspecific games
+        diff_target_reached = TARGET_RETURN - sum(rewards)
+
+        print(f"Difference of target reward and reached reward: {diff_target_reached}")
+
+        # for direct evaluation on specific known games
+        actions_pred = actions.detach().numpy()
+
+        actions_correct = dataset["train"]["actions"][game_index]
+
+        # soft_max = nn.Softmax(dim=0)
+        # action_pred_sm = soft_max(actions)
+
+        hand_len = 12 if any(actions_correct[0]) else 10
+
+        prob_each_act_correct = actions_pred * actions_correct
+
+        prob_correct_action = sum(sum(prob_each_act_correct[12 - hand_len:])) / hand_len
+
+        print(f"Avg probability of correct action: {prob_correct_action}")
         break
-
-correct_actions = dataset["train"]["actions"][game_index]
-
-prob_each_act_correct = actions.detach().numpy() * correct_actions
-
-prob_correct_action = sum(sum(prob_each_act_correct)) / 12
-
-print(f"Avg probability of correct action: {prob_correct_action}")
 
 # TODO: check behaviour of rewards
