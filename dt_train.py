@@ -1,30 +1,41 @@
 import random
 from dataclasses import dataclass
+from typing import Dict, Union, Tuple
 
 import numpy as np
 import torch
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, load_metric
 from torch import nn
 from torch import Tensor
 
-from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
+from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig, \
+    TrainerCallback
 from transformers.integrations import TensorBoardCallback
+from transformers.modeling_utils import unwrap_model
+from transformers.models.decision_transformer.modeling_decision_transformer import DecisionTransformerOutput
 
 import data_pipeline
 import environment
 
 # %%
-game_index = 7
+# gameID 4: index 5
+game_index = 4
 
-games = (7, 8)  # (0, 128)
+games_interval = (game_index, game_index + 1)  # (0, 200)  # (0, 128)
 
 print("Loading data...")
-data, one_game = data_pipeline.get_states_actions_rewards(amount_games=games[1],
+data, one_game = data_pipeline.get_states_actions_rewards(amount_games=games_interval[1],
                                                           point_rewards=False,
                                                           game_index=game_index)
 
 # %%
 dataset = DatasetDict({"train": Dataset.from_dict(data)})
+
+# Done: 0 actions when not putting Skat should be changed due to malicious behaviour
+# Done, but doesnt fix problem
+
+# Done: evaluate one hot encoding with same outcome
+
 
 # %%
 
@@ -73,14 +84,14 @@ dataset = DatasetDict({"train": Dataset.from_dict(data)})
 # [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1], [0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
 # [0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0], [0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1]
 #
-#   state size = 3 + 4 + 3 * 5 + 2 * 5 + 48 = 80
-#   episode length: (s + a + r) * 12 = (80 + 12 + 1) * 12 = 1116  x
+#   state size = 3 + 4 + 3 * 12 + 2 * 12 + 48 = 115
+#   episode length: (s + a + r) * 12 = (115 + 12 + 1) * 12 = 1 536  x
 
-act_dim = 12
+act_dim = 10
 card_dim = 5
 
 # for padding of hand_cards, it is the maximum size with a compressed card representation
-max_hand_len = 28
+max_hand_len = 16 + act_dim  # 12 * card_dim  # 28
 
 # position co-player (3) + trump (4) + last trick (3 * card_dim)
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
@@ -94,11 +105,11 @@ state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"  # pytorch
-    max_len: int = 12  # subsets of the episode we use for training, our episode length is short
+    max_len: int = 10  # subsets of the episode we use for training, our episode length is short
     state_dim: int = state_dim  # size of state space
     act_dim: int = act_dim  # size of action space
-    max_ep_len: int = 12  # max episode length in the dataset
-    scale: float = 12.0  # normalization of rewards/returns
+    max_ep_len: int = 10  # max episode length in the dataset
+    scale: float = 1.0  # normalization of rewards/returns
     state_mean: np.array = None  # to store state means
     state_std: np.array = None  # to store state stds
     p_sample: np.array = None  # a distribution to take account trajectory lengths
@@ -123,7 +134,7 @@ class DecisionTransformerSkatDataCollator:
         traj_lens = np.array(traj_lens)
         self.p_sample = traj_lens / sum(traj_lens)
 
-    def get_batch_ind(self):  # game_length
+    def get_batch_ind(self):
         # picks game indices
         # this picks the same game over *times* times
         # (WC GameID 4: Agent sits in rear hand as soloist)
@@ -153,7 +164,7 @@ class DecisionTransformerSkatDataCollator:
         # )
 
         # a batch of dataset features
-        s, a, r, rtg, timesteps, mask = [], [], [], [], [], []
+        s, a, r, rtg, timesteps, mask, big_action_mask = [], [], [], [], [], [], []
 
         for ind in batch_inds:
             # for feature in features:
@@ -174,7 +185,7 @@ class DecisionTransformerSkatDataCollator:
             timesteps.append(np.arange(si, si + s[-1].shape[1]).reshape(1, -1))
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
-                self._discount_cumsum(np.array(feature["rewards"][si:]), gamma=1.0)[: s[-1].shape[1]
+                self._discount_cumsum(np.array(feature["rewards"][si:]), gamma=0.99)[: s[-1].shape[1]
                 ].reshape(1, -1, 1)  # TODO check the +1 removed here
             )
             if rtg[-1].shape[1] < s[-1].shape[1]:
@@ -201,7 +212,7 @@ class DecisionTransformerSkatDataCollator:
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1)  # / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
-            # TODO: mask could stay the same, what is s[-1]?
+            # big_action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
 
         s = torch.from_numpy(np.concatenate(s, axis=0)).float()
         a = torch.from_numpy(np.concatenate(a, axis=0)).float()
@@ -210,6 +221,7 @@ class DecisionTransformerSkatDataCollator:
         rtg = torch.from_numpy(np.concatenate(rtg, axis=0)).float()
         timesteps = torch.from_numpy(np.concatenate(timesteps, axis=0)).long()
         mask = torch.from_numpy(np.concatenate(mask, axis=0)).float()
+        # torch.from_numpy(np.concatenate(big_action_mask, axis=0)).float()  #
 
         return {
             "states": s,
@@ -225,8 +237,98 @@ class TrainableDT(DecisionTransformerModel):
     def __init__(self, config):
         super().__init__(config)
 
+    def originalForward(
+            self,
+            states=None,
+            actions=None,
+            rewards=None,
+            returns_to_go=None,
+            timesteps=None,
+            attention_mask=None,
+            output_hidden_states=None,
+            output_attentions=None,
+            return_dict=None,
+            action_mask=None
+    ) -> Union[Tuple, DecisionTransformerOutput]:
+
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        batch_size, seq_length = states.shape[0], states.shape[1]
+
+        if attention_mask is None:
+            # attention mask for GPT: 1 if can be attended to, 0 if not
+            attention_mask = torch.ones((batch_size, seq_length), dtype=torch.long)
+
+        # embed each modality with a different head
+        state_embeddings = self.embed_state(states)
+        action_embeddings = self.embed_action(actions)
+        returns_embeddings = self.embed_return(returns_to_go)
+        time_embeddings = self.embed_timestep(timesteps)
+
+        # time embeddings are treated similar to positional embeddings
+        state_embeddings = state_embeddings + time_embeddings
+        action_embeddings = action_embeddings + time_embeddings
+        returns_embeddings = returns_embeddings + time_embeddings
+
+        # action_embeddings = action_embeddings * action_mask
+
+        # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
+        # which works nice in an autoregressive sense since states predict actions
+        stacked_inputs = (
+            torch.stack((returns_embeddings, state_embeddings, action_embeddings), dim=1)
+            .permute(0, 2, 1, 3)
+            .reshape(batch_size, 3 * seq_length, self.hidden_size)
+        )
+        stacked_inputs = self.embed_ln(stacked_inputs)
+
+        # TODO: change action attention mask action_mask
+        # to make the attention mask fit the stacked inputs, have to stack it as well
+        stacked_attention_mask = (
+            torch.stack((attention_mask, attention_mask, attention_mask), dim=1)
+            .permute(0, 2, 1)
+            .reshape(batch_size, 3 * seq_length)
+        )
+        device = stacked_inputs.device
+        # we feed in the input embeddings (not word indices as in NLP) to the model
+        encoder_outputs = self.encoder(
+            inputs_embeds=stacked_inputs,
+            attention_mask=stacked_attention_mask,
+            position_ids=torch.zeros(stacked_attention_mask.shape, device=device, dtype=torch.long),
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        x = encoder_outputs[0]
+
+        # reshape x so that the second dimension corresponds to the original
+        # returns (0), states (1), or actions (2); i.e. x[:,1,t] is the token for s_t
+        x = x.reshape(batch_size, seq_length, 3, self.hidden_size).permute(0, 2, 1, 3)
+
+        # get predictions
+        return_preds = self.predict_return(x[:, 2])  # predict next return given state and action
+        state_preds = self.predict_state(x[:, 2])  # predict next state given state and action
+        action_preds = self.predict_action(x[:, 1])  # predict next action given state
+        if not return_dict:
+            return (state_preds, action_preds, return_preds)
+
+        return DecisionTransformerOutput(
+            last_hidden_state=encoder_outputs.last_hidden_state,
+            state_preds=state_preds,
+            action_preds=action_preds,
+            return_preds=return_preds,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+        )
+
     def forward(self, **kwargs):
-        output = super().forward(**kwargs)
+        action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
+        action_mask = torch.from_numpy(np.concatenate(action_mask, axis=0)).float()
+
+        output = self.originalForward(**kwargs, action_mask=action_mask)  # super().forward(**kwargs)
         # add the DT loss
         action_preds = output[1]
         action_targets = kwargs["actions"]
@@ -235,8 +337,61 @@ class TrainableDT(DecisionTransformerModel):
         action_preds = action_preds.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
         action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
 
+        soft_max = nn.Softmax(dim=1)
+
+        action_preds_sm = action_preds  # soft_max(action_preds)
+
+        action_preds_sm = action_preds_sm  # * action_targets
+
+        debug_sm = soft_max(action_preds)[:10,:] * action_targets[:10,:]
+
+        # cross entropy loss
+        cross_ent_fct = nn.CrossEntropyLoss()  # reduction='sum')
+
+        cross_ent_loss = cross_ent_fct(action_preds_sm, action_targets)
+
+        loss = cross_ent_loss
+
+        # forbidden_action_mask = [np.concatenate([np.zeros((1, 10-t)), np.ones((1, t))], axis=1)
+        #                          for t in range(10 - action_preds_sm.shape[0], 10)]
+        # forbidden_action_mask = torch.from_numpy(np.concatenate(forbidden_action_mask, axis=0)).float()
+        #
+        # mask2 = torch.from_numpy(np.zeros((1, action_preds_sm.shape[0] * action_preds_sm.shape[1])).reshape(action_preds_sm.shape[0], action_preds_sm.shape[1]))
+        #
+        # action_preds_forb = action_preds_sm * forbidden_action_mask
+
+        # loss += sum(sum(abs(action_preds_forb))) * 0.1
+
+        # state (experimental)
+        state_preds = output[0]
+        state_targets = kwargs["states"]
+        attention_mask = kwargs["attention_mask"]
+        state_dim = state_preds.shape[2]
+        state_preds = state_preds.reshape(-1, state_dim)[attention_mask.reshape(-1) > 0]
+        state_targets = state_targets.reshape(-1, state_dim)[attention_mask.reshape(-1) > 0]
+
+        soft_max = nn.Softmax(dim=1)
+
+        state_preds_sm = soft_max(state_preds)
+
         # cross entropy loss
         cross_ent_fct = nn.CrossEntropyLoss()
+
+        state_preds_sm = state_preds_sm * state_targets
+
+        state_loss = cross_ent_fct(state_preds_sm, state_targets)
+
+        # reward (experimental)
+        reward_preds = output[2]
+        reward_targets = kwargs["rewards"]
+        attention_mask = kwargs["attention_mask"]
+        reward_dim = reward_preds.shape[2]
+        reward_preds = reward_preds.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
+        reward_targets = reward_targets.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
+
+        mse_fct = nn.MSELoss()
+
+        reward_loss = mse_fct(reward_preds, reward_targets)
 
         # soft_max_fct = nn.Softmax(1)  # TODO: softmax
         # soft_maxed = soft_max_fct(action_preds)
@@ -249,16 +404,15 @@ class TrainableDT(DecisionTransformerModel):
         #
         # prob_correct_action = sum(sum(prob_each_act_correct[12 - hand_len:])) / hand_len
 
-        cross_ent_loss = cross_ent_fct(action_preds, action_targets)
-
-        loss = cross_ent_loss
-
-        soft_max = nn.Softmax(dim=0)
+        # only predicts the prob in context of 12 cards
+        soft_max = nn.Softmax(dim=1)
         action_pred_sm = soft_max(action_preds)
 
         prob_each_act_correct = action_pred_sm * action_targets
 
         prob_correct_action = sum(sum(prob_each_act_correct)) / action_preds.shape[0]
+
+        # print(f"probability of correct action: {prob_correct_action}")
 
         # problem of double logging. _maybe_log_save_evaluate logs already, but does not get passed additional metrics
         # logs: Dict[str, float] = {}
@@ -274,42 +428,35 @@ class TrainableDT(DecisionTransformerModel):
         return super().forward(**kwargs)
 
 
+# class CustomTBCallback(TensorBoardCallback):
+#     def on_log(self, args, state, control, logs=None, **kwargs):
+
 # class CustomDTTrainer(Trainer):
-    # def compute_loss(self, model, inputs, return_outputs=False):
-    #     if self.label_smoother is not None and "labels" in inputs:
-    #         labels = inputs.pop("labels")
-    #     else:
-    #         labels = None
-    #     outputs = model(**inputs)
-    #     # Save past state if it exists
-    #     # TODO: this needs to be fixed and made cleaner later.
-    #     if self.args.past_index >= 0:
-    #         self._past = outputs[self.args.past_index]
-    #
-    #     if labels is not None:
-    #         from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
-    #         if unwrap_model(model)._get_name() in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-    #             loss = self.label_smoother(outputs, labels, shift_labels=True)
-    #         else:
-    #             loss = self.label_smoother(outputs, labels)
-    #     else:
-    #         if isinstance(outputs, dict) and "loss" not in outputs:
-    #             raise ValueError(
-    #                 "The model did not return a loss from the inputs, only the following keys: "
-    #                 f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
-    #             )
-    #         # We don't use .loss here since the model may return tuples instead of ModelOutput.
-    #         loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-    #
-    #     # logger.
-    #
-    #     return (loss, outputs) if return_outputs else loss
+#
+#     def compute_loss(self, model, inputs, return_outputs=False):
+#         loss, outputs = super().compute_loss(model, inputs, return_outputs=True)
+#
+#         if self._globalstep_last_logged == self.state.global_step:
+#             logs: Dict[str, float] = {}
+#
+#             # # all_gather + mean() to get average loss over all processes
+#             # tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+#             # # reset tr_loss to zero
+#             # tr_loss -= tr_loss
+#             for entry in outputs:
+#                 logs.update({entry: round(float(outputs[entry].detach()), 4)})
+#
+#             # logs["loss"] = round(loss / (self.state.global_step - self._globalstep_last_logged), 4),
+#             logs["learning_rate"] = self._get_learning_rate()
+#
+#             self.log(logs)
+#
+#         return loss  # if return_outputs else loss
 
-# def compute_metrics(eval_preds):
-#     metric = evaluate.load("accuracy")
-#     predictions = np.argmax(eval_preds.predictions, axis=1)
-#     return metric.compute(predictions=predictions, references=eval_preds.label_ids)
 
+# class LogCallback(TrainerCallback):
+#     def on_evaluate(self, args, state, control, **kwargs):
+#         # calculate loss here
 
 # class OwnTensorboardCallback(TensorBoardCallback):
 # class OwnCallback(TensorBoardCallback):
@@ -317,18 +464,32 @@ class TrainableDT(DecisionTransformerModel):
 #         if state.is_local_process_zero:
 #             print(logs)
 
+def compute_metrics(eval_pred):
+    metric1 = load_metric("precision")
+    metric2 = load_metric("recall")
+
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    precision = metric1.compute(predictions=predictions, references=labels)["precision"]
+    recall = metric2.compute(predictions=predictions, references=labels)["recall"]
+    return {"precision": precision, "recall": recall}
 
 
-
-collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=games)
+collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=games_interval)
 
 config = DecisionTransformerConfig(
-    state_dim=collator.state_dim,
-    act_dim=collator.act_dim,
+    state_dim=state_dim,
+    act_dim=act_dim,
     action_tanh=False,  # do not apply the tanh fct on the output action
     activation_function="tanh",
-    max_ep_len=12,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
-    vocab_size=35,  # there are 32 cards + pos_tp + score +  + trump_enc
+    # n_head=2,
+    # n_layer=2,
+    max_ep_len=10,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
+    # vocab_size=1200,  # there are 32 cards + pos_tp + score +  + trump_enc
+    n_positions=1024,
+    scale_attn_weights=True,
+    embd_pdrop=0.1,
+    resid_pdrop=0.1
 )
 # TODO: how is the vocabulary defined?
 
@@ -343,29 +504,31 @@ training_args = TrainingArguments(
     report_to=["tensorboard"],
     output_dir="training_output/",
     remove_unused_columns=False,
-    num_train_epochs=240,
+    num_train_epochs=250,
     per_device_train_batch_size=64,
     learning_rate=1e-3,
-    # weight_decay=1e-4,
-    # warmup_ratio=0.1,
+    weight_decay=1e-4,
+    warmup_ratio=0.1,
     optim="adamw_torch",
-    max_grad_norm=0.25,
+    max_grad_norm=0.1,
     logging_steps=10,
-    evaluation_strategy="steps",
-    eval_steps=50,
     logging_dir="./training-logs",
-    do_eval=True
+
+    # do_eval=True,
+    # evaluation_strategy="steps",
+    # eval_steps=50,
+
     # no_cuda=True,
     # label_names=label_names
 )
 
-trainer = Trainer(
+trainer = Trainer(  # CustomDTTrainer
     model=model,
     args=training_args,
     train_dataset=dataset["train"],
     eval_dataset=dataset["train"],  # TODO: anderes Spiel
     data_collator=collator,
-    # compute_metrics=compute_metrics
+    compute_metrics=compute_metrics,
     # callbacks=[tensorboard_callback]
 )
 
@@ -458,7 +621,7 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     return action_preds[0, -1]
 
 
-MAX_EPISODE_LENGTH = 12
+MAX_EPISODE_LENGTH = 10
 scale = 1
 
 # state_mean = np.array()
@@ -476,84 +639,88 @@ state_std = torch.from_numpy(state_std).to(device="cpu")
 # env = environment.Env() if one_game is None else one_game
 env = environment.Env()
 
-TARGET_RETURN = 60
+TARGET_RETURN = 2 * 120  # 102
 
-# build the environment for the evaluation
-state = env.reset(current_player_id=(game_index % 3) + 1, game_env=one_game)  # game_states=dataset['train'][8]['states'])
-target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
-states = torch.from_numpy(state).reshape(1, state_dim).float()
-actions = torch.zeros((0, act_dim)).float()
-rewards = torch.zeros(0).float()
-timesteps = torch.tensor(0).reshape(1, 1).long()
+for eval_game in range(1):  # dataset["test"]:
 
-# take steps in the environment (evaluation, not training)
-for t in range(MAX_EPISODE_LENGTH):
-    # add zeros for actions as input for the current time-step
-    actions = torch.cat([actions, torch.zeros((1, act_dim))], dim=0)
-    rewards = torch.cat([rewards, torch.zeros(1)])
+    # TODO: scale up
+    # we need the others
 
-    # predicting the action to take
-    action = get_action(model,
-                        states,  # - state_mean) / state_std,
-                        actions,
-                        rewards,
-                        target_return,
-                        timesteps)
+    # build the environment for the evaluation
+    state = env.reset(current_player_id=(game_index % 3), game_env=one_game)
+    # game_states=dataset['train'][8]['states'])
 
-    soft_max = nn.Softmax(dim=0)
-    action = soft_max(action)
+    target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
+    states = torch.from_numpy(state).reshape(1, state_dim).float()
+    actions = torch.zeros((0, act_dim)).float()
+    rewards = torch.zeros(0).float()
+    timesteps = torch.tensor(0).reshape(1, 1).long()
 
-    print(f"action {t}: {action}")
-    actions[-1] = action
-    action = action.detach().numpy()
+    # take steps in the environment (evaluation, not training)
+    for t in range(MAX_EPISODE_LENGTH):
+        # add zeros for actions as input for the current time-step
+        actions = torch.cat([actions, torch.zeros((1, act_dim))], dim=0)
+        rewards = torch.cat([rewards, torch.zeros(1)])
 
-    # hand cards within the state are padded from right to left after each action
-    # mask the action
-    action[-t:] = 0
+        # predicting the action to take
+        action_pred = get_action(model,
+                            states,  # - state_mean) / state_std,
+                            actions,
+                            rewards,
+                            target_return,
+                            timesteps)
 
-    valid_actions = action[:MAX_EPISODE_LENGTH - t]
+        soft_max = nn.Softmax(dim=0)
+        action_pred = soft_max(action_pred)
 
-    # get the index of the card with the highest probability
-    card_index = np.argmax(valid_actions)
+        print(f"Action {t}: {action_pred}")
 
-    # only select the best card
-    action[:] = 0
-    action[card_index] = 1
+        action = action_pred.detach().numpy()
 
-    # interact with the environment based on this action
-    state, reward, done = env.step(tuple(action))
+        # hand cards within the state are padded from right to left after each action
+        # mask the action
+        # action[-t:] = 0
 
-    print(f"Reward: {reward}")
+        valid_actions = action[:MAX_EPISODE_LENGTH - t]
 
-    cur_state = torch.from_numpy(state).reshape(1, state_dim)
-    states = torch.cat([states, cur_state], dim=0)
-    rewards[-1] = reward
+        # get the index of the card with the highest probability
+        card_index = np.argmax(valid_actions)
 
-    pred_return = target_return[0, -1] - (reward / scale)
-    target_return = torch.cat([target_return, pred_return.reshape(1, 1)], dim=1)
-    timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
+        # only select the best card
+        action[:] = 0
+        action[card_index] = 1
 
-    if done:
-        # for evaluation of unspecific games
-        diff_target_reached = TARGET_RETURN - sum(rewards)
+        actions[-1] = Tensor(action)
 
-        print(f"Difference of target reward and reached reward: {diff_target_reached}")
+        # interact with the environment based on this action
+        state, reward, done = env.step(tuple(action))
 
-        # for direct evaluation on specific known games
-        actions_pred = actions.detach().numpy()
+        print(f"Reward {t}: {reward}")
 
-        actions_correct = dataset["train"]["actions"][game_index]
+        cur_state = torch.from_numpy(state).reshape(1, state_dim)
+        states = torch.cat([states, cur_state], dim=0)
+        rewards[-1] = reward
 
-        # soft_max = nn.Softmax(dim=0)
-        # action_pred_sm = soft_max(actions)
+        pred_return = target_return[0, -1] - (reward / scale)
+        target_return = torch.cat([target_return, pred_return.reshape(1, 1)], dim=1)
+        timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
 
-        hand_len = 12 if any(actions_correct[0]) else 10
+        if done:
+            # for evaluation of unspecific games
+            diff_target_reached = TARGET_RETURN - sum(rewards)
 
-        prob_each_act_correct = actions_pred * actions_correct
+            print(f"Difference of target reward and reached reward: {diff_target_reached}")
 
-        prob_correct_action = sum(sum(prob_each_act_correct[12 - hand_len:])) / hand_len
+            # for direct evaluation on specific known games
+            actions_pred = actions.detach().numpy()
 
-        print(f"Avg probability of correct action: {prob_correct_action}")
-        break
+            actions_correct = dataset["train"]["actions"][game_index]
 
-# TODO: check behaviour of rewards
+            hand_len = 10  # 12 if any(actions_correct[0]) else 10
+
+            prob_each_act_correct = actions_pred * actions_correct
+
+            prob_correct_action = sum(sum(prob_each_act_correct)) / hand_len  # [12 - hand_len:]
+
+            print(f"Avg probability of correct action: {prob_correct_action}")
+            break

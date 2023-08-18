@@ -16,7 +16,7 @@ class GameStateStart(GameState):
         # reset most game values
         self.game.reset()
         # set the next dealer
-        self.game.dealer = (self.game.dealer + 1) % len(self.game.players)
+        # self.game.dealer = (self.game.dealer + 1) % len(self.game.players)
 
     def handle_action(self, action):
         if isinstance(action, StartGameAction):

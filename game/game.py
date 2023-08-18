@@ -1,5 +1,3 @@
-import pylab as p
-
 from model.card import Card
 from model.player import Player
 
