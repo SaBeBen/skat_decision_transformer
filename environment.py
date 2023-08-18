@@ -16,7 +16,7 @@ from model.card import Card
 from model.player import Player
 
 # card representation is a vector
-act_dim = 10
+act_dim = 12
 
 card_dim = 5
 
@@ -265,73 +265,61 @@ class Env:
 
         self.skat_put = [True, True]
 
-        # update status
-        self.skat_put[0] = False
-
-        # put down the second Skat card
-        if not self.hand:
-            if self.current_player is self.game.get_declarer():
-                # # first Skat card as action
-                # self.skat_down.append(self.current_player.cards[card_index.index(1)])
-                #
-                # # add the card value of second Skat card as reward
-                # reward = Card.get_value(self.skat_down[0])
-
-                self.score[0] = Card.get_value(self.skat_down[0])
-                # TODO: self.game.skat instead of init in data pipeline, in general: optimize variables
-
-            try:
-                self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[0]))
-            except ValueError:
-                raise exceptions.InvalidPlayerMove(
-                    f"Player {self.current_player.get_id()} is not holding card {self.skat_down[0]}! "
-                    f"The hand cards are {self.current_player.cards}")
-
-            self.current_player.cards.sort()
-
-        # last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
+        # # update status
+        # self.skat_put[0] = False
         #
-        # open_cards = [0] * card_dim + [0] * card_dim
+        # # put down the first Skat card
+        # if not self.hand:
+        #     if self.current_player is self.game.get_declarer():
+        #         self.score[0] = Card.get_value(self.skat_down[0])
+        #         # TODO: self.game.skat instead of init in data pipeline, in general: optimize variables
+        #
+        #     try:
+        #         self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[0]))
+        #     except ValueError:
+        #         raise exceptions.InvalidPlayerMove(
+        #             f"Player {self.current_player.get_id()} is not holding card {self.skat_down[0]}! "
+        #             f"The hand cards are {self.current_player.cards}")
+        #
+        #     self.current_player.cards.sort()
+        #
+        # # update status
+        # self.skat_put[1] = False
+        #
+        # # put down the second Skat card
+        # if not self.hand:
+        #
+        #     if self.current_player is self.game.get_declarer():
+        #         self.score[0] += Card.get_value(self.skat_down[1])
+        #
+        #     try:
+        #         self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[1]))
+        #     except ValueError:
+        #         raise exceptions.InvalidPlayerMove(
+        #             f"Player {self.current_player.get_id()} is not holding card {self.skat_down[1]}! "
+        #             f"The hand cards are {self.current_player.cards}")
 
-        # update status
-        self.skat_put[1] = False
+        # self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
 
-        # put down the second Skat card
-        if not self.hand:
+        # if self.current_player is self.game.get_declarer():
+        #     # get the cards of the last trick and convert them to the card representation
+        #     self.last_trick = convert_card_to_vector(self.skat_down[0]) + convert_card_to_vector(self.skat_down[1]) + [
+        #         0] * card_dim  # [0] * card_dim * 3
+        # else:
+        #     self.last_trick = [0] * card_dim * 3
+        #
+        # if self.game.get_first_seat() is self.current_player:
+        #     # get the open cards and convert them to the card representation
+        #     open_cards = [0] * card_dim * 2
+        # elif self.game.get_second_seat() is self.current_player:
+        #     open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * 1 - 1]) + [0] * card_dim
+        # else:
+        #     open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * 1 - 1]) + convert_one_hot_to_vector(
+        #         self.skat_and_cs[3 * 1])
 
-            if self.current_player is self.game.get_declarer():
-                # second Skat card as action
-                # self.skat_down.append(self.current_player.cards[card_index.index(1)])
-                #
-                # # add the card value of second Skat card as reward
-                # reward = Card.get_value(self.skat_down[1])
+        open_cards = [0] * card_dim * 2
 
-                self.score[0] += Card.get_value(self.skat_down[1])
-
-            try:
-                self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[1]))
-            except ValueError:
-                raise exceptions.InvalidPlayerMove(
-                    f"Player {self.current_player.get_id()} is not holding card {self.skat_down[1]}! "
-                    f"The hand cards are {self.current_player.cards}")
-
-        self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
-
-        if self.current_player is self.game.get_declarer():
-            # get the cards of the last trick and convert them to the card representation
-            self.last_trick = convert_card_to_vector(self.skat_down[0]) + convert_card_to_vector(self.skat_down[1]) + [
-                0] * card_dim  # [0] * card_dim * 3
-        else:
-            self.last_trick = [0] * card_dim * 3
-
-        if self.game.get_first_seat() is self.current_player:
-            # get the open cards and convert them to the card representation
-            open_cards = [0] * card_dim * 2
-        elif self.game.get_second_seat() is self.current_player:
-            open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * 1 - 1]) + [0] * card_dim
-        else:
-            open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * 1 - 1]) + convert_one_hot_to_vector(
-                self.skat_and_cs[3 * 1])
+        self.last_trick = [0] * card_dim * 3
 
         # pad the Skat on the defenders hands if the agent is one
         # if current_player_id != soloist.get_id() or (current_player_id == soloist.get_id() and self.hand):
@@ -339,10 +327,10 @@ class Env:
 
         game_state = self.pos_p + self.score + self.trump_enc + self.last_trick + open_cards + get_hand_cards(
             self.current_player)
-
-        self.last_trick = self.last_trick = convert_one_hot_to_vector(
-            self.skat_and_cs[3 * 1 - 1]) + convert_one_hot_to_vector(
-            self.skat_and_cs[3 * 1]) + convert_one_hot_to_vector(self.skat_and_cs[3 * 1 + 1])
+        #
+        # self.last_trick = self.last_trick = convert_one_hot_to_vector(
+        #     self.skat_and_cs[3 * 1 - 1]) + convert_one_hot_to_vector(
+        #     self.skat_and_cs[3 * 1]) + convert_one_hot_to_vector(self.skat_and_cs[3 * 1 + 1])
 
         self.state = game_state
 
@@ -382,10 +370,10 @@ class Env:
 
                 if self.current_player is self.game.get_declarer():
                     # # first Skat card as action
-                    # self.skat_down.append(self.current_player.cards[card_index.index(1)])
+                    self.skat_down.append(self.current_player.cards[card_index.index(1)])
                     #
                     # # add the card value of second Skat card as reward
-                    # reward = Card.get_value(self.skat_down[0])
+                    reward = Card.get_value(self.skat_down[0])
 
                     self.score[0] = Card.get_value(self.skat_down[0])
                     # TODO: self.game.skat instead of init in data pipeline, in general: optimize variables
@@ -400,8 +388,8 @@ class Env:
                 self.current_player.cards.sort()
 
             # last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
-            #
-            # open_cards = [0] * card_dim + [0] * card_dim
+
+            open_cards = [0] * card_dim + [0] * card_dim
 
         elif self.skat_put[1]:
             # update status
@@ -412,10 +400,10 @@ class Env:
 
                 if self.current_player is self.game.get_declarer():
                     # second Skat card as action
-                    # self.skat_down.append(self.current_player.cards[card_index.index(1)])
+                    self.skat_down.append(self.current_player.cards[card_index.index(1)])
                     #
                     # # add the card value of second Skat card as reward
-                    # reward = Card.get_value(self.skat_down[1])
+                    reward = Card.get_value(self.skat_down[1])
 
                     self.score[0] += Card.get_value(self.skat_down[1])
 
@@ -430,14 +418,27 @@ class Env:
             # this state will be the third state, namely the one after Skat putting
 
             # last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
-            #
-            # open_cards = [0] * card_dim + [0] * card_dim
+
+            open_cards = [0] * card_dim + [0] * card_dim
 
             self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
+
+            # separate ifs for next open cards
+            if self.game.trick.get_current_player() == self.current_player:
+                # in position of first player, there are no open cards
+                open_cards = [0] * card_dim + [0] * card_dim
+            if self.game.trick.get_next_player(self.current_player) == self.current_player:
+                # in position of the second player, there is one open card
+                open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * (self.trick) - 1]) + [0] * card_dim
+            else:
+                # in position of the third player, there are two open cards
+                open_cards = convert_one_hot_to_vector(
+                    self.skat_and_cs[3 * (self.trick) - 1]) + convert_one_hot_to_vector(
+                    self.skat_and_cs[3 * (self.trick)])
         else:
-            # if Skat is put in reset
-            if self.trick == 1 and self.current_player is self.game.get_declarer():
-                reward += Card.get_value(self.skat_down[0]) + Card.get_value(self.skat_down[1])
+            # # if Skat is put in reset
+            # if self.trick == 1 and self.current_player is self.game.get_declarer():
+            #     reward += Card.get_value(self.skat_down[0]) + Card.get_value(self.skat_down[1])
 
             # select the card on the players hand
             card = self.current_player.cards[card_index.index(1)]
@@ -519,7 +520,7 @@ class Env:
         game_state = self.pos_p + self.score + self.trump_enc + self.last_trick + open_cards + get_hand_cards(
             self.current_player)
 
-        if not done:
+        if not self.skat_put[1] and not done:
             self.last_trick = convert_one_hot_to_vector(
                 self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
                 self.skat_and_cs[3 * self.trick]) + convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick + 1])

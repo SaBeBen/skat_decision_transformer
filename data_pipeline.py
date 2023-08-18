@@ -17,7 +17,7 @@ from model.player import Player
 from model.card import Card
 
 # actions are a vector which encodes the cards to select categorically
-act_dim = 10
+act_dim = 12
 
 # cards are a vector, first 4 entries are a one-hot encoding of the suit, the fifth is the face encoded by an integer
 card_dim = 5
@@ -75,7 +75,7 @@ def get_game(game="wc"):
 
     # exclude games where all players passed
     skat_game_data = skat_game_data[(skat_game_data["AllPassed"] == 0) & (skat_game_data["Surrendered"] == 0)]
-                                    # & (skat_game_data["Won"] == 1)]
+    # & (skat_game_data["Won"] == 1)]
     #
 
     # exclude grand and null games
@@ -339,20 +339,16 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     fs_one_game.skat_and_cs = skat_and_cs[cs_index]
                     # fs_one_game.suit = trump
 
-                # if env.game.get_declarer() != current_player:
-                # pad the current cards to a length of 12, if agent does not pick up Skat
-                # hand_cards += [0] * card_dim + [0] * card_dim
-
                 # first game state + score
-                # game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)  #
+                game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
 
                 # ...put down Skat one by one
                 # each Skat card needs its own action (due to fixed dimensions)
                 if current_player.type == Player.Type.DECLARER:
                     # categorical encoding of played card as action: put first card
                     cat_action = [0] * act_dim
-                    # cat_action[current_player.cards.index(skat1)] = 1
-                    # actions.append(cat_action)
+                    cat_action[current_player.cards.index(skat1)] = 1
+                    actions.append(cat_action)
 
                     # put down first Skat card in the environment
                     env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down[0]))
@@ -364,15 +360,12 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     # the last trick is the put Skat and padding in the beginning
                     last_trick = convert_card_to_vector(skat1) + [0] * card_dim + [0] * card_dim
 
-                    # hand_cards += card_dim * [0]
-
-                    # + score
-                    # game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)  #
+                    game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
 
                     # categorical encoding of played card as action: put second card
                     cat_action = [0] * act_dim
-                    # cat_action[current_player.cards.index(skat2)] = 1
-                    # actions.append(cat_action)
+                    cat_action[current_player.cards.index(skat2)] = 1
+                    actions.append(cat_action)
 
                     # put down second Skat card in the environment
                     env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down[1]))
@@ -384,23 +377,19 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     # the last trick is the put Skat and padding in the beginning
                     last_trick = convert_card_to_vector(skat1) + convert_card_to_vector(skat2) + [0] * card_dim
 
-                    # hand_cards += card_dim * [0] * 2
-
                     # it is not necessary to simulate sequential putting with actions and rewards
                     # instantly get rewards of the put Skat
-                    # rewards.extend([skat_down[0].get_value() + skat_down[1].get_value()])
+                    rewards.extend([skat_down[0].get_value(), skat_down[1].get_value()])
 
                 else:
                     # the process of Skat selection is not visible for defenders,
                     # thus it is padded and the defenders cards do not change
 
                     # there is no action during the Skat putting for the defenders
-                    # actions += [[0] * act_dim, [0] * act_dim]
-                    # rewards += [0 + 0]
+                    actions += [[0] * act_dim, [0] * act_dim]
+                    rewards += [0, 0]
 
-                    # + score
-                    # game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(
-                    #     current_player)  # pos_p + trump_enc + last_trick + open_cards +
+                    game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
 
                     # put Skat down in the environment
                     env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down))
@@ -414,22 +403,16 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     fs_one_game.skat_and_cs = skat_and_cs[cs_index]
                     # fs_one_game.suit = trump
 
-                # pad the cards to a length of 12
-                # hand_cards += card_dim * [0] * 2
-
                 # there is no action during the Skat putting when playing hand
-                # actions.extend([[0] * act_dim, [0] * act_dim])
-                # rewards.extend([0 + 0])
+                actions.extend([[0] * act_dim, [0] * act_dim])
+                rewards.extend([0, 0])
 
                 # if hand is played, there are two identical game states from the perspective of every player
-                #
-                # game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(
-                #     current_player)
-                # 
-                # # + score
-                # game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(
-                #     current_player)
-                
+
+                game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+
+                game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+
             # declare the game variant
             declare_game_variant(env, trump)
 
@@ -457,8 +440,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                         # in position of first player, there are no open cards
                         open_cards = [0] * card_dim + [0] * card_dim
 
-                        game_state += open_cards + get_hand_cards(
-                            current_player)  # pos_p + trump_enc + last_trick + open_cards +
+                        game_state += open_cards + get_hand_cards(current_player)
 
                         cat_action = [0] * act_dim
                         cat_action[current_player.cards.index(
@@ -494,8 +476,7 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                         open_cards = convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick - 1]) + \
                                      convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick])
 
-                        game_state += open_cards + get_hand_cards(
-                            current_player)  # pos_p + trump_enc + last_trick + open_cards +
+                        game_state += open_cards + get_hand_cards(current_player)
 
                         cat_action = [0] * act_dim
                         cat_action[current_player.cards.index(
@@ -549,17 +530,16 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
                     rewards[-1] = -0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
             else:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games
-                rewards[-1] *= 1 #(1 if won else 0)
+                rewards[-1] *= 1  # (1 if won else 0)
 
             # in the end of each game, insert the states, actions and rewards
             # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
             # insert states
-            game_state_table[3 * cs_index + i] = np.array_split([float(i) for i in game_state], act_dim)
+            game_state_table[3 * cs_index + i] = np.array_split(game_state, act_dim)  # [float(i) for i in game_state]
             # insert actions
             actions_table[3 * cs_index + i] = actions  # np.array_split([float(i) for i in actions], 12)
             # insert rewards
             rewards_table[3 * cs_index + i] = [[i] for i in rewards]
-            # np.array_split([float(i) for i in rewards], 12)
 
         cs_index = cs_index + 1
 

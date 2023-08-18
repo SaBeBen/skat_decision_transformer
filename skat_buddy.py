@@ -52,9 +52,9 @@ print("\n" + player3.name + ": " + str(player3.cards))
 
 # carol put down skat
 print(player3.name + " puts skat down")
-state_machine.handle_action(PutDownSkatAction(player3, player3.cards[0]))  # TODO: Agent
+state_machine.handle_action(PutDownSkatAction(player3, player3.cards[0]))
 print("\nSkat: " + str(game.skat))
-state_machine.handle_action(PutDownSkatAction(player3, player3.cards[1]))  # TODO: Agent
+state_machine.handle_action(PutDownSkatAction(player3, player3.cards[1]))
 print("\nSkat: " + str(game.skat))
 
 
