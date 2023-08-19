@@ -2,7 +2,7 @@ import numpy as np
 
 import exceptions
 from card_representation_conversion import convert_one_hot_to_card, convert_card_to_vector, \
-    convert_one_hot_to_vector
+    convert_one_hot_to_vector, convert_tuple_to_card
 
 from game.game import Game
 from game.game_state_machine import GameStateMachine
@@ -147,6 +147,24 @@ def get_hand_cards(current_player):
     return hand_cards
 
 
+def initialise_hand_cards(game, current_player, current_player2, current_player3):
+    # ...instead, initialise the hand cards
+    current_player.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + 10 * current_player.get_id():14 + 10 * current_player.get_id()].tolist()])
+    current_player2.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + 10 * current_player2.get_id():14 + 10 * current_player2.get_id()].tolist()])
+    current_player3.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + 10 * current_player3.get_id():14 + 10 * current_player3.get_id()].tolist()])
+
+    # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
+    current_player.cards.sort()
+    current_player2.cards.sort()
+    current_player3.cards.sort()
+
+
 class Env:
     def __init__(self):
         # self.device = torch.device("cuda")
@@ -192,13 +210,13 @@ class Env:
 
         return game_points
 
-    def reset(self, current_player_id, game_env=None):
+    def reset(self, current_player_id, game_first_state=None, meta_and_cards_game=None):
         # self.game.dealer += 1
 
         self.game.reset()
 
         # DONE: Problem: How do we initialise the seating and bidding?
-        if game_env is None:
+        if game_first_state is None:
             self.state_machine = GameStateMachine(GameStateStart(self.game))
             # shuffles and gives out cards
             self.state_machine.handle_action(StartGameAction())
@@ -229,39 +247,74 @@ class Env:
 
             self.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(trump)))
 
-        else:
-            # StartGameAction not necessary with an already initialised game
-            # state of game after Skat was picked up is used
-            self.game = game_env.game
-            self.state_machine = game_env.state_machine
-            self.skat_down = game_env.skat_down
-            self.skat_and_cs = game_env.skat_and_cs
-            self.player1 = game_env.player1
-            self.player2 = game_env.player2
-            self.player3 = game_env.player3
-            self.hand = game_env.hand
+        # else:
+        # StartGameAction not necessary with an already initialised game
+        # state of game after Skat was picked up is used
 
-        # determine the position of players
-        pos_p = [0, 0, 0]
+        # making independent of env
 
-        if self.game.get_declarer().get_id() == current_player_id:
-            # initialise positions of defender as -1
-            pos_p[(current_player_id + 1) % 3], pos_p[(current_player_id + 2) % 3] = -1, -1
-        elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
-            pos_p[(current_player_id + 1) % 3] = -1
-            pos_p[(current_player_id + 2) % 3] = 1
-        else:
-            pos_p[(current_player_id + 1) % 3] = 1
-            pos_p[(current_player_id + 2) % 3] = -1
+        # Option 1: (preferred)
+        # pass 1st game state from data in dt_train to initialise all vars and pass it back
 
-        # set the player positions and roles
-        self.pos_p = pos_p
+        # Option 2: pass every necessary var
 
-        # get the current trump
-        self.trump_enc = get_trump_enc(self.game.game_variant.get_trump())
+        # self.game = game_env.game
+        # self.state_machine = game_env.state_machine
+        # self.skat_down = game_env.skat_down
+        # self.skat_and_cs = game_env.skat_and_cs
+        # self.player1 = game_env.player1
+        # self.player2 = game_env.player2
+        # self.player3 = game_env.player3
+        # self.hand = game_env.hand
+
+        # game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+
+        self.pos_p = game_first_state[:3]
+
+        self.trump_enc = game_first_state[3:6]
+
+        self.current_player = self.game.players[current_player_id]
+
+        initialise_hand_cards(meta_and_cards_game,
+                              self.current_player,
+                              self.game.players[current_player_id + 1 % 3],
+                              self.game.players[current_player_id + 2 % 3])
+
+        # # Problem: Karten der anderen Spieler
+        # if self.pos_p[0] == 0:
+        #     # read in the hand_cards
+        #     convert_tuple_to_card()
+        #     self.game.players[current_player_id].set_cards(game_state[])
+        # elif self.pos_p[1] == 0:
+        #     convert_tuple_to_card()
+        #     self.game.players[current_player_id].set_cards(game_state[])
+        # else:
+        #     convert_tuple_to_card()
+        #     self.game.players[current_player_id].set_cards(game_state[])
 
         # set the current player on the copied environment
-        self.current_player = self.game.players[current_player_id]
+
+        # determine the position of players
+        # pos_p = [0, 0, 0]
+        #
+        # if self.game.get_declarer().get_id() == current_player_id:
+        #     # initialise positions of defender as -1
+        #     pos_p[(current_player_id + 1) % 3], pos_p[(current_player_id + 2) % 3] = -1, -1
+        # elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
+        #     pos_p[(current_player_id + 1) % 3] = -1
+        #     pos_p[(current_player_id + 2) % 3] = 1
+        # else:
+        #     pos_p[(current_player_id + 1) % 3] = 1
+        #     pos_p[(current_player_id + 2) % 3] = -1
+        #
+        # # set the player positions and roles
+        # self.pos_p = pos_p
+        #
+        # # get the current trump
+        # self.trump_enc = get_trump_enc(self.game.game_variant.get_trump())
+        #
+        # # set the current player on the copied environment
+        # self.current_player = self.game.players[current_player_id]
 
         self.skat_put = [True, True]
 
@@ -317,7 +370,7 @@ class Env:
         #     open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * 1 - 1]) + convert_one_hot_to_vector(
         #         self.skat_and_cs[3 * 1])
 
-        open_cards = [0] * card_dim * 2
+        # open_cards = [0] * card_dim * 2
 
         self.last_trick = [0] * card_dim * 3
 
@@ -325,16 +378,16 @@ class Env:
         # if current_player_id != soloist.get_id() or (current_player_id == soloist.get_id() and self.hand):
         #     hand_cards += card_dim * [0] * 2
 
-        game_state = self.pos_p + self.score + self.trump_enc + self.last_trick + open_cards + get_hand_cards(
-            self.current_player)
+        # game_state = self.pos_p + self.score + self.trump_enc + self.last_trick + open_cards + get_hand_cards(
+        #     self.current_player)
         #
         # self.last_trick = self.last_trick = convert_one_hot_to_vector(
         #     self.skat_and_cs[3 * 1 - 1]) + convert_one_hot_to_vector(
         #     self.skat_and_cs[3 * 1]) + convert_one_hot_to_vector(self.skat_and_cs[3 * 1 + 1])
 
-        self.state = game_state
+        self.state = game_first_state
 
-        return np.array(game_state)
+        return np.array(game_first_state)
 
     def step(self, card_index):
         # TODO: make step independent of existing env, use states, reset can be made independent (only change trump_enc)

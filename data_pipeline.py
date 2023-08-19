@@ -128,16 +128,16 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
 
 
 def initialise_hand_cards(game, current_player, current_player2, current_player3, i):
-    # ...instead, initialise the hand cards
+     # ...instead, initialise the hand cards
     current_player.set_cards(
         [convert_one_hot_to_card(card) for card in
-         game[4 + 10 * i:14 + 10 * i].tolist()])
+         game[4 + 10 * current_player.get_id():14 + 10 * current_player.get_id()].tolist()])
     current_player2.set_cards(
         [convert_one_hot_to_card(card) for card in
-         game[4 + ((10 + 10 * i) % 30):4 + ((20 + 10 * i - 1) % 30 + 1)].tolist()])
+         game[4 + 10 * current_player2.get_id():14 + 10 * current_player2.get_id()].tolist()])
     current_player3.set_cards(
         [convert_one_hot_to_card(card) for card in
-         game[4 + ((20 + 10 * i) % 30):4 + ((30 + 10 * i - 1) % 30 + 1)].tolist()])
+         game[4 + 10 * current_player3.get_id():14 + 10 * current_player3.get_id()].tolist()])
 
     # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
     current_player.cards.sort()
@@ -187,11 +187,9 @@ def get_hand_cards(current_player):
 
 
 def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewards=False, game_index=-1):
+    # TODO: use amount of games for get_game
     meta_and_cards, skat_and_cs = get_game(game=championship)
 
-    # meta_and_cards = [meta_and_cards[game_index],]
-
-    # skat_and_cs = [skat_and_cs[game_index],]
 
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
@@ -547,4 +545,4 @@ def get_states_actions_rewards(championship="wc", amount_games=1000, point_rewar
         "states": game_state_table,
         "actions": actions_table,
         "rewards": rewards_table,
-    }, fs_one_game
+    }, fs_one_game, meta_and_cards
