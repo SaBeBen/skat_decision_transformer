@@ -6,95 +6,52 @@ from math import floor
 from typing import Dict, Union, Tuple, Optional, List, Any
 
 import numpy as np
+import pandas as pd
 import torch
-from datasets import Dataset, DatasetDict, load_metric
+from transformers.integrations import TensorBoardCallback
+
+from datasets import Dataset, DatasetDict, load_metric, load_dataset
 from torch import nn
 from torch import Tensor
+from sklearn.model_selection import train_test_split
 
 from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig, \
-    TrainerCallback
-from transformers.debug_utils import DebugOption
-from transformers.integrations import TensorBoardCallback
-from transformers.modeling_utils import unwrap_model
-from transformers.models.decision_transformer.modeling_decision_transformer import DecisionTransformerOutput
-from transformers.trainer_utils import speed_metrics
+    TrainerCallback, TrainerState, TrainerControl
 
+from transformers.models.decision_transformer.modeling_decision_transformer import DecisionTransformerOutput
+from transformers.trainer_callback import CallbackHandler
+from transformers.trainer_utils import speed_metrics, IntervalStrategy
 
 import data_pipeline
 import environment
+
+from numba import cuda
 
 # %%
 # gameID 4: index 5
 game_index = 5
 
-games_interval = (0, 300)  # (game_index, game_index + 1)  # (0, 200)  # (0, 128)
+games_to_load = slice(0, 100)
+
+# indices of games to train on
+# games_train_ind = (0, 700)
 
 print("Loading data...")
-data, one_game, meta_and_cards = data_pipeline.get_states_actions_rewards(amount_games=games_interval[1],
-                                                                          point_rewards=False,
-                                                                          game_index=game_index)
+data, _ = data_pipeline.get_states_actions_rewards(games_indices=games_to_load,
+                                                   point_rewards=False,
+                                                   game_index=game_index)
+
+data_frame = pd.DataFrame(data)
+
+data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)  # 42
 
 # %%
-dataset = DatasetDict({"train": Dataset.from_dict(data)})
+dataset = DatasetDict({"train": Dataset.from_dict(data_train),
+                       "test": Dataset.from_dict(data_test)})
 
-# TODO: save dataset
-
-# Done: 0 actions when not putting Skat should be changed due to malicious behaviour
-# Done, but doesnt fix problem
-
-# Done: evaluate one hot encoding with same outcome
-
-# Done: back to actions with Skat putting
+# dataset = load_dataset("./datasets/wc_without_surr_and_passed")
 
 # %%
-
-# FIXED: problem of context length max = 1024: see Solution 3
-
-# atm of Problem (each Skat as action, card_dim 5, cards on hand): episode length = 105 * 12 = 1260
-
-# problem at action 9 (10th action) (10 * 105 = 1050) (should select 3rd card, selects 1st):
-# tensor([0.2189, 0.1059, 0.1479, 0.0586, 0.0595, 0.0583, 0.0585, 0.0587, 0.0584, 0.0586, 0.0583, 0.0586])
-
-# Solution 1:
-# Skat as first last trick
-#   hand_cards -= 2, 2 s, a, r less
-#   state_dim = -> 82
-#   episode length = (82 + 12 + 1) * 10 = 950 v
-
-#   But what if we want to encode the Skat as two separate actions?
-
-# Solution 2:
-# compress card representation with sorting by suit and further identifying by face
-# example: [0, 1, 0, 0, 1, 5, 7, 8, 0, 0, 0, 0]
-#   -> spades 7, K, A, J, missing: 8, 9, Q, 10
-#   size per colour with padding -> 4 + 8 = 12
-#   size of whole hand 12 * 4 = 48
-#   state size = 3 + 4 + 3 * 5 + 2 * 5 + 48 = 80
-#   episode: (s + a + r) * 12 = (80 + 12 + 1) * 12 = 1116
-#   episode with Skat as first last trick: 93 * 10 = 930 v
-
-# Solution 3: currently used
-# Solution 2 + further compressing: do not pad the suits, only pad up to the max possible state length
-#   max_hand_length = 16 (encoding of colours) + 12 (all cards) = 28
-# pad with zeros
-# Example 1:
-# [1, 0, 0, 0, 1, 5, 7, 8], [0, 1, 0, 0, 1, 5],
-# [0, 0, 1, 0, 2, 3, 4], [0, 0, 0, 1, 1, 3, 8]
-# Example 2:
-# [1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8], [0] * (max_hand_length - 12)
-#
-#   state size = 3 + 4 + 3 * 5 + 2 * 5 + 28 = 60
-#   episode length: (s + a + r) * 12 = (60 + 12 + 1) * 12 = 876 v
-
-# Solution 4 (respects problem with loss function):
-# Solution 3, but solely with one-hot encoded cards
-#   hand_length = 4 * 12 = 48
-# Example 1:
-# [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1], [0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
-# [0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0], [0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1]
-#
-#   state size = 3 + 4 + 3 * 12 + 2 * 12 + 48 = 115
-#   episode length: (s + a + r) * 12 = (115 + 12 + 1) * 12 = 1 536  x
 
 MAX_EPISODE_LENGTH = 12
 
@@ -108,8 +65,7 @@ max_hand_len = 16 + act_dim  # 12 * card_dim  # 28
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
 state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
 
-
-# device = torch.device("cuda") # "cpu"
+device = torch.device("cuda")  # "cpu"
 
 
 # adapted from https://huggingface.co/blog/train-decision-transformers
@@ -124,10 +80,10 @@ class DecisionTransformerSkatDataCollator:
     state_mean: np.array = None  # to store state means
     state_std: np.array = None  # to store state stds
     p_sample: np.array = None  # a distribution to take account trajectory lengths
-    n_traj: int = 0  # to store the number of trajectories in the dataset TODO: do we need this?
+    n_traj: int = 0  # to store the number of trajectories in the dataset
     games_ind: tuple = (0, 0)
 
-    def __init__(self, dataset, games_ind) -> None:
+    def __init__(self, dataset, games_ind=None) -> None:
         self.act_dim = len(dataset[0]["actions"][0])
         self.state_dim = len(dataset[0]["states"][0])
         self.dataset = dataset
@@ -149,7 +105,7 @@ class DecisionTransformerSkatDataCollator:
         # picks game indices
         # this picks the same game over *times* times
         # (WC GameID 4: Agent sits in rear hand as soloist)
-        times = 32
+        times = 1
         return np.tile(np.arange(self.games_ind[0], self.games_ind[1]), times)
 
     def _discount_cumsum(self, x, gamma):
@@ -157,22 +113,23 @@ class DecisionTransformerSkatDataCollator:
         discount_cumsum = np.zeros_like(x)
         discount_cumsum[-1] = x[-1]
         for t in reversed(range(x.shape[0] - 1)):
+            # gamma as a discount factor to differ rewards temporarily
             discount_cumsum[t] = x[t] + gamma * discount_cumsum[t + 1]
         return discount_cumsum
 
     def __call__(self, features):
         batch_size = 32  # len(features)
 
-        batch_inds = self.get_batch_ind()  # self.state_dim * self.max_ep_len
+        # batch_inds = self.get_batch_ind()  # self.state_dim * self.max_ep_len
 
         # this is a bit of a hack to be able to sample of a non-uniform distribution
         # we have a random pick of the data as a batch without controlling the shape,
-        # batch_inds = np.random.choice(
-        #     np.arange(self.n_traj),
-        #     size=batch_size,
-        #     replace=True,
-        #     p=self.p_sample,  # reweights, so we sample according to timesteps
-        # )
+        batch_inds = np.random.choice(
+            np.arange(self.n_traj),
+            size=batch_size,
+            replace=True,
+            p=self.p_sample,  # reweights, so we sample according to timesteps
+        )
 
         # a batch of dataset features
         s, a, r, rtg, timesteps, mask, big_action_mask = [], [], [], [], [], [], []
@@ -184,8 +141,12 @@ class DecisionTransformerSkatDataCollator:
 
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
-            # TODO: jumping randomly into a surrendered game does not work well
+            # TODO: jumping randomly into a surrendered game could not work well
             si = 0  # random.randint(0, len(feature["rewards"]) - 1)  # 0
+
+            # TODO: does the self attention have to model the knowledge over time (mask with 1 from left to right)
+            #  or chase the reward (mask with 1s from right to left)
+            #  --> to which extent is the attention mask implemented
 
             # get sequences from dataset
             s.append(np.array(feature["states"]
@@ -223,6 +184,7 @@ class DecisionTransformerSkatDataCollator:
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1)  # / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
+            # TODO: mask from left to right
             # big_action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
 
         s = torch.from_numpy(np.concatenate(s, axis=0)).float()
@@ -296,7 +258,7 @@ class TrainableDT(DecisionTransformerModel):
         )
         stacked_inputs = self.embed_ln(stacked_inputs)
 
-        # TODO: change action attention mask action_mask
+        # TODO: change action attention mask action_mask, prob not here
         # to make the attention mask fit the stacked inputs, have to stack it as well
         stacked_attention_mask = (
             torch.stack((attention_mask, attention_mask, attention_mask), dim=1)
@@ -339,7 +301,7 @@ class TrainableDT(DecisionTransformerModel):
         # action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
         # action_mask = torch.from_numpy(np.concatenate(action_mask, axis=0)).float()
 
-        output = self.originalForward(**kwargs)  # super().forward(**kwargs)
+        output = super().forward(**kwargs)  # self.originalForward(**kwargs)  # super().forward(**kwargs)
         # add the DT loss
         action_preds = output[1]
         action_targets = kwargs["actions"]
@@ -365,39 +327,77 @@ class TrainableDT(DecisionTransformerModel):
 
         # loss += sum(sum(abs(action_preds_forb))) * 0.1
 
-        # reward (experimental)
-        reward_preds = output[2]
-        reward_targets = kwargs["rewards"]
-        attention_mask = kwargs["attention_mask"]
-        reward_dim = reward_preds.shape[2]
-        reward_preds = reward_preds.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
-        reward_targets = reward_targets.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
+        # # reward (experimental)
+        # reward_preds = output[2]
+        # reward_targets = kwargs["rewards"]
+        # attention_mask = kwargs["attention_mask"]
+        # reward_dim = reward_preds.shape[2]
+        # reward_preds = reward_preds.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
+        # reward_targets = reward_targets.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
+        #
+        # mse_fct = nn.MSELoss()
+        #
+        # reward_loss = mse_fct(reward_preds, reward_targets)
 
-        mse_fct = nn.MSELoss()
+        prob_correct_action, rate_wrong_action_taken = -1, -1
 
-        reward_loss = mse_fct(reward_preds, reward_targets)
+        # calculate advanced metrics only during evaluation to increase training speed
+        if True:  # not self.training:
+            # only predicts the prob in context of 12 cards
+            soft_max = nn.Softmax(dim=1)
+            action_pred_sm = soft_max(action_preds)
 
-        # only predicts the prob in context of 12 cards
-        soft_max = nn.Softmax(dim=1)
-        action_pred_sm = soft_max(action_preds)
+            prob_each_act_correct = action_pred_sm * action_targets
 
-        prob_each_act_correct = action_pred_sm * action_targets
+            # exclude Skat putting for defenders and hand games
+            amount_no_skat_games = action_targets.shape[0] / 12 - torch.sum(
+                action_targets[torch.arange(start=0, end=action_targets.shape[0], step=12)])
+            prob_correct_action = torch.sum(prob_each_act_correct) / (
+                    action_targets.shape[0] - amount_no_skat_games * 2)
 
-        # exclude Skat putting for defenders
-        sum_defending_games = sum([not any(action_targets[t * 12, :]) for t in range(round(action_targets.shape[0]/12))])
-        prob_correct_action = sum(sum(prob_each_act_correct)) / (action_targets.shape[0] - sum_defending_games * 2)
+            # TODO: calculate other metrics
 
-        # TODO: calculate other metrics
+            # we want to know to what probability the model actually chooses an action != target_action,
+            # not the accumulated prob of actions != target_action
 
-        # problem of double logging. _maybe_log_save_evaluate logs already, but does not get passed additional metrics
-        # logs: Dict[str, float] = {}
-        # logs =
-        # self.log()
+            # wrong_action_taken = action_pred_sm * ~action_targets.bool()
+            action_taken = torch.argmax(action_pred_sm, dim=1)
+
+            action_mask = torch.zeros_like(action_targets)
+            action_mask[torch.arange(action_targets.shape[0]), action_taken] = 1
+
+            wrong_action_taken = action_mask * ~action_targets.bool()
+
+            # absolute amount of wrong cards being chosen, statistically exclude defending games
+            # (first two actions are always wrong)
+            amount_wrong_actions_taken = torch.sum(wrong_action_taken) - amount_no_skat_games * 2
+
+            # rate of wrong cards being chosen
+            rate_wrong_action_taken = amount_wrong_actions_taken / action_targets.shape[0]
+
+        # problem of action during Skat putting, TODO: mask first two actions of defenders/hand
+        # prob_wrong_action_taken = action_pred_sm * wrong_action_taken
+        #
+        # prob_wrong_action_taken = sum(sum(prob_wrong_action_taken)) / (action_targets.shape[0] - sum_defending_games * 2)
+
+        # wrong_action_taken = action_taken * ~action_targets.bool()
+
+        # states = kwargs["states"]
+        #
+        # # states_trump_enc = states[:,:,5:9]
+        # state_cards = states[:, :, -max_hand_len:]
+        #
+        # state_cards
+        # selected_cards = action_taken   # already indices
+
+        # TODO: include rules by looking at first open card and colour (including trump_enc), length
+        # prob_illegal_action =
 
         # manual logging
         # writer.add_scalar("Loss/train", loss,)  # problem: get episode
 
-        return {"loss": loss, "probability of correct action": prob_correct_action}  # loss, prob_correct_action
+        return {"loss": loss, "probability_of_correct_action": prob_correct_action,
+                "rate_wrong_action_taken": rate_wrong_action_taken}  # loss, prob_correct_action
 
     def original_forward(self, **kwargs):
         return super().forward(**kwargs)
@@ -419,9 +419,9 @@ class DTTrainer(Trainer):
         output = self.evaluation_loop(
             eval_dataloader,
             description="Evaluation",
-            # No point gathering the predictions if there are no metrics, otherwise we defer to
-            # self.args.prediction_loss_only
-            prediction_loss_only=True if self.compute_metrics is None else None,
+            # We want the predictions, as the metrics are passed through them
+            # not only the loss
+            prediction_loss_only=None,
             ignore_keys=ignore_keys,
             metric_key_prefix=metric_key_prefix,
         )
@@ -431,10 +431,21 @@ class DTTrainer(Trainer):
         #     start_time += output.metrics[f"{metric_key_prefix}_jit_compilation_time"]
 
         # injected behaviour
-        output.metrics.update(
-            {"eval_loss: ": round(float(output.predictions[0][-1]), 4),
-             "probability correct action": round(float(output.predictions[1][-1]), 4)}
-        )
+        if len(output.predictions[0].shape) != 0:
+            output.metrics.update(
+                {"eval_loss: ": round(float(output.predictions[0][-1]), 4),
+                 "prob_correct_action": round(float(output.predictions[1][-1]), 4),
+                 "rate_wrong_action_taken": round(float(output.predictions[2][-1]), 4)
+                 }
+            )
+        else:
+            # edge case of one game
+            output.metrics.update(
+                {"eval_loss: ": round(float(output.predictions[0]), 4),
+                 "prob_correct_action": round(float(output.predictions[1]), 4),
+                 "rate_wrong_action_taken": round(float(output.predictions[2]), 4)
+                 }
+            )
 
         output.metrics.update(
             speed_metrics(
@@ -454,8 +465,6 @@ class DTTrainer(Trainer):
         self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, output.metrics)
 
         self._memory_tracker.stop_and_update_metrics(output.metrics)
-
-        # print(output.metrics)
 
         return output.metrics
 
@@ -481,83 +490,69 @@ class DTTrainer(Trainer):
         else:
             self.accelerator.backward(loss)
 
-        outputs["probability of correct action"] = round(float(outputs["probability of correct action"]), 4)
+        outputs["probability_of_correct_action"] = round(float(outputs["probability_of_correct_action"]), 4)
         outputs["loss"] = round(float(loss), 4)
+        outputs["rate_wrong_action_taken"] = round(float(outputs["rate_wrong_action_taken"]), 4)
 
-        # self.log(outputs)
+        # problem of double logging. _maybe_log_save_evaluate logs already, but does not get passed additional metrics
+        # workaround to log during training
+        if self.state.global_step == 1 and self.args.logging_first_step:
+            self.control.should_log = True
+        if self.args.logging_strategy == IntervalStrategy.STEPS and self.state.global_step % self.args.logging_steps == 0:
+            self.control.should_log = True
 
-        return loss.detach() / self.args.gradient_accumulation_steps
-
-    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
         if self.control.should_log:
-            # if is_torch_tpu_available():
-            #     xm.mark_step()
+            metrics: Dict[str, float] = {}
 
-            logs: Dict[str, float] = {}
+            tr_loss_step = round(float(loss.detach() / self.args.gradient_accumulation_steps), 4)
 
-            # all_gather + mean() to get average loss over all processes
-            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+            metrics["tr_loss"] = tr_loss_step
+            metrics["learning_rate"] = self._get_learning_rate()
 
-            # reset tr_loss to zero
-            tr_loss -= tr_loss
-
-            logs["train_loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
-            logs["learning_rate"] = self._get_learning_rate()
-
-            self._total_loss_scalar += tr_loss_scalar
+            self._total_loss_scalar += tr_loss_step
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
 
-            self.log(logs)
+            metrics["probability_of_correct_action"] = outputs["probability_of_correct_action"]
+            # logs["loss"] = outputs["loss"]
+            metrics["rate_wrong_action_taken"] = outputs["rate_wrong_action_taken"]
 
-        metrics = None
-        if self.control.should_evaluate:
-            if isinstance(self.eval_dataset, dict):
-                metrics = {}
-                for eval_dataset_name, eval_dataset in self.eval_dataset.items():
-                    dataset_metrics = self.evaluate(
-                        eval_dataset=eval_dataset,
-                        ignore_keys=ignore_keys_for_eval,
-                        metric_key_prefix=f"eval_{eval_dataset_name}",
-                    )
-                    metrics.update(dataset_metrics)
-            else:
-                metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
-            self._report_to_hp_search(trial, self.state.global_step, metrics)
+            self.log(metrics)
 
-            # Run delayed LR scheduler now that metrics are populated
-            if isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                metric_to_check = self.args.metric_for_best_model
-                if not metric_to_check.startswith("eval_"):
-                    metric_to_check = f"eval_{metric_to_check}"
-                self.lr_scheduler.step(metrics[metric_to_check])
-
-        if self.control.should_save:
-            self._save_checkpoint(model, trial, metrics=metrics)
-            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+        return loss.detach() / self.args.gradient_accumulation_steps
 
 
-# class CustomTBCallback(TensorBoardCallback):
-#     def on_log(self, args, state, control, logs=None, **kwargs):
-#
+class CustomTBCallback(TensorBoardCallback):
+    # the following method is introduced to prevent double logging
+    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        # Log
+        control.should_log = False
 
-# class LogCallback(TrainerCallback):
-#     def on_evaluate(self, args, state, control, **kwargs):
-#         # calculate loss here
+        # Evaluate
+        if (
+                args.evaluation_strategy == IntervalStrategy.STEPS
+                and state.global_step % args.eval_steps == 0
+                and args.eval_delay <= state.global_step
+        ):
+            control.should_log = True
+            control.should_evaluate = True
+
+        # Save
+        if (
+                args.save_strategy == IntervalStrategy.STEPS
+                and args.save_steps > 0
+                and state.global_step % args.save_steps == 0
+        ):
+            control.should_save = True
+
+        # End training
+        if state.global_step >= state.max_steps:
+            control.should_training_stop = True
+
+        return control
 
 
-def compute_metrics(eval_pred):
-    metric1 = load_metric("precision")
-    metric2 = load_metric("recall")
-
-    logits, labels = eval_pred
-    predictions = np.argmax(logits, axis=-1)
-    precision = metric1.compute(predictions=predictions, references=labels)["precision"]
-    recall = metric2.compute(predictions=predictions, references=labels)["recall"]
-    return {"precision": precision, "recall": recall}
-
-
-collator = DecisionTransformerSkatDataCollator(dataset["train"], games_ind=games_interval)
+collator = DecisionTransformerSkatDataCollator(dataset["train"])
 
 config = DecisionTransformerConfig(
     state_dim=state_dim,
@@ -565,53 +560,61 @@ config = DecisionTransformerConfig(
     action_tanh=False,  # do not apply the tanh fct on the output action
     activation_function="tanh",
     # n_head=2,
-    # n_layer=2,
+    n_layer=2,
     max_ep_len=MAX_EPISODE_LENGTH,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
     # vocab_size=1200,  # there are 32 cards + pos_tp + score +  + trump_enc
     n_positions=1024,
     scale_attn_weights=True,
     embd_pdrop=0.1,
-    resid_pdrop=0.1
+    resid_pdrop=0.1,
+    max_length=MAX_EPISODE_LENGTH,
 )
 # how is the vocabulary defined?
 
+
+# pretrained_model = TrainableDT.from_pretrained("./pretrained_models/Wed_Aug_23_09-41-40_2023-games_100-0-sampled-unexpectedly_well")
+# model = pretrained_model
+
 model = TrainableDT(config)
 
-# model.to(device)
+# if torch.cuda.device_count() > 1:
+#     model = torch.nn.DataParallel(model)
 
-# logging_files_name = "dt_training_{}_{}.log"
-# label_names = ["states", "actions", "rewards", "returns_to_go", "timesteps", "attention_mask"]
+model.to(device)
 
 training_args = TrainingArguments(
-    report_to=["tensorboard"],
+    # report_to=["tensorboard"],
     output_dir="training_output/",
     remove_unused_columns=False,
     num_train_epochs=1000,
-    per_device_train_batch_size=64,
+    per_device_train_batch_size=32,
     learning_rate=1e-3,
     weight_decay=1e-4,
     warmup_ratio=0.1,
     optim="adamw_torch",
     max_grad_norm=0.1,
     logging_steps=10,
-    logging_dir="./training-logs",
+    logging_dir=rf"./training-logs/"
+                rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_"
+                rf"{games_to_load.stop}-{games_to_load.start}-sampled",
 
     # do_eval=True,
     # evaluation_strategy="steps",
-    # eval_steps=10,
+    # eval_steps=50,
 
     # no_cuda=True,
-    # label_names=label_names
 )
+
+tensorboard_callback = CustomTBCallback()
 
 trainer = DTTrainer(  # CustomDTTrainer
     model=model,
     args=training_args,
     train_dataset=dataset["train"],
-    eval_dataset=dataset["train"],  # TODO: anderes Spiel/Datenset
+    eval_dataset=dataset["test"],
     data_collator=collator,
-    compute_metrics=compute_metrics,
-    # callbacks=[tensorboard_callback]
+    # compute_metrics=compute_metrics,  # is not reachable without labels
+    callbacks=[tensorboard_callback]
 )
 
 print("Training...")
@@ -622,28 +625,23 @@ trainer.train()
 # 2. run training
 # 3. tensorboard --logdir=./training-logs
 
-training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
+# for saving the model:
+# model.save_pretrained(
+#     rf"./pretrained_models/"
+#     rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_{games_to_load.stop}-{games_to_load.start}-sampled")
+# and loading it again
+# pretrained_model = TrainableDT.from_pretrained("./pretrained_models")
+# trainer.model = pretrained_model
 
-# training_args.
+# collator.games_ind = (game_index + 1, game_index + 2)
+
+training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
 
 evaluation_results = trainer.evaluate()
 
 print(evaluation_results)
 
-# evaluation_args = TrainingArguments(
-#     output_dir="./output_dir",
-#     # Other training arguments
-# )
-#
-# # Create the Trainer instance
-# trainer = Trainer(
-#     model=model,
-#     args=evaluation_args,
-#     data_collator=collator,
-# )
-#
-# # Evaluate the RL model on the evaluation dataset
-# evaluation_results = trainer.evaluate()
+# training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = False, None, None
 
 
 # # %%
