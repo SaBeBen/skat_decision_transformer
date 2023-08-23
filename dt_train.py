@@ -141,12 +141,13 @@ class DecisionTransformerSkatDataCollator:
 
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
-            # TODO: jumping randomly into a surrendered game could not work well
-            si = 0  # random.randint(0, len(feature["rewards"]) - 1)  # 0
+            #  jumping randomly into a surrendered game could not work well
+            si = random.randint(0, len(feature["rewards"]) - 1)  # 0
 
-            # TODO: does the self attention have to model the knowledge over time (mask with 1 from left to right)
+            #  does the self attention have to model the knowledge over time (mask with 1 from left to right)
             #  or chase the reward (mask with 1s from right to left)
-            #  --> to which extent is the attention mask implemented
+            #  --> to which extent is the attention mask implemented?
+            # attention_mask is defined over time steps and the order in which the data is ordered in here
 
             # get sequences from dataset
             s.append(np.array(feature["states"]
@@ -184,7 +185,6 @@ class DecisionTransformerSkatDataCollator:
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1)  # / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
-            # TODO: mask from left to right
             # big_action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
 
         s = torch.from_numpy(np.concatenate(s, axis=0)).float()
@@ -301,12 +301,14 @@ class TrainableDT(DecisionTransformerModel):
         # action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
         # action_mask = torch.from_numpy(np.concatenate(action_mask, axis=0)).float()
 
-        output = super().forward(**kwargs)  # self.originalForward(**kwargs)  # super().forward(**kwargs)
+        output = self.originalForward(**kwargs)  # self.originalForward(**kwargs)  # super().forward(**kwargs)
         # add the DT loss
         action_preds = output[1]
         action_targets = kwargs["actions"]
         attention_mask = kwargs["attention_mask"]
         act_dim = action_preds.shape[2]
+
+        # exclude actions that are not attended to
         action_preds = action_preds.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
         action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
 
@@ -327,17 +329,6 @@ class TrainableDT(DecisionTransformerModel):
 
         # loss += sum(sum(abs(action_preds_forb))) * 0.1
 
-        # # reward (experimental)
-        # reward_preds = output[2]
-        # reward_targets = kwargs["rewards"]
-        # attention_mask = kwargs["attention_mask"]
-        # reward_dim = reward_preds.shape[2]
-        # reward_preds = reward_preds.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
-        # reward_targets = reward_targets.reshape(-1, reward_dim)[attention_mask.reshape(-1) > 0]
-        #
-        # mse_fct = nn.MSELoss()
-        #
-        # reward_loss = mse_fct(reward_preds, reward_targets)
 
         prob_correct_action, rate_wrong_action_taken = -1, -1
 
@@ -350,17 +341,16 @@ class TrainableDT(DecisionTransformerModel):
             prob_each_act_correct = action_pred_sm * action_targets
 
             # exclude Skat putting for defenders and hand games
-            amount_no_skat_games = action_targets.shape[0] / 12 - torch.sum(
-                action_targets[torch.arange(start=0, end=action_targets.shape[0], step=12)])
-            prob_correct_action = torch.sum(prob_each_act_correct) / (
-                    action_targets.shape[0] - amount_no_skat_games * 2)
+            # amount of actions - amount of actions that select a card
+            amount_no_skat_action = action_targets.shape[0] - torch.sum(action_targets)
 
-            # TODO: calculate other metrics
+            # the accumulated probability of the correct action / total number of actions taken in targets
+            prob_correct_action = torch.sum(prob_each_act_correct) / (
+                    action_targets.shape[0] - amount_no_skat_action)
 
             # we want to know to what probability the model actually chooses an action != target_action,
-            # not the accumulated prob of actions != target_action
+            # not the accumulated prob of (actions != target_action)
 
-            # wrong_action_taken = action_pred_sm * ~action_targets.bool()
             action_taken = torch.argmax(action_pred_sm, dim=1)
 
             action_mask = torch.zeros_like(action_targets)
@@ -370,18 +360,16 @@ class TrainableDT(DecisionTransformerModel):
 
             # absolute amount of wrong cards being chosen, statistically exclude defending games
             # (first two actions are always wrong)
-            amount_wrong_actions_taken = torch.sum(wrong_action_taken) - amount_no_skat_games * 2
+            amount_wrong_actions_taken = torch.sum(wrong_action_taken) - amount_no_skat_action
 
             # rate of wrong cards being chosen
             rate_wrong_action_taken = amount_wrong_actions_taken / action_targets.shape[0]
 
-        # problem of action during Skat putting, TODO: mask first two actions of defenders/hand
-        # prob_wrong_action_taken = action_pred_sm * wrong_action_taken
-        #
-        # prob_wrong_action_taken = sum(sum(prob_wrong_action_taken)) / (action_targets.shape[0] - sum_defending_games * 2)
-
-        # wrong_action_taken = action_taken * ~action_targets.bool()
-
+        # TODO: problem of compressed states: indexing of cards and determining length of cards is difficult
+        #  possible solution: timesteps
+        # timesteps = kwargs["timesteps"]
+        # timesteps.count_nonzero(dim=1)
+        # action_taken
         # states = kwargs["states"]
         #
         # # states_trump_enc = states[:,:,5:9]
@@ -393,11 +381,8 @@ class TrainableDT(DecisionTransformerModel):
         # TODO: include rules by looking at first open card and colour (including trump_enc), length
         # prob_illegal_action =
 
-        # manual logging
-        # writer.add_scalar("Loss/train", loss,)  # problem: get episode
-
         return {"loss": loss, "probability_of_correct_action": prob_correct_action,
-                "rate_wrong_action_taken": rate_wrong_action_taken}  # loss, prob_correct_action
+                "rate_wrong_action_taken": rate_wrong_action_taken}
 
     def original_forward(self, **kwargs):
         return super().forward(**kwargs)
@@ -507,11 +492,11 @@ class DTTrainer(Trainer):
             tr_loss_step = round(float(loss.detach() / self.args.gradient_accumulation_steps), 4)
 
             metrics["tr_loss"] = tr_loss_step
-            metrics["learning_rate"] = self._get_learning_rate()
+            # metrics["learning_rate"] = self._get_learning_rate()
 
-            self._total_loss_scalar += tr_loss_step
-            self._globalstep_last_logged = self.state.global_step
-            self.store_flos()
+            # self._total_loss_scalar += tr_loss_step
+            # self._globalstep_last_logged = self.state.global_step
+            # self.store_flos()
 
             metrics["probability_of_correct_action"] = outputs["probability_of_correct_action"]
             # logs["loss"] = outputs["loss"]
@@ -522,34 +507,34 @@ class DTTrainer(Trainer):
         return loss.detach() / self.args.gradient_accumulation_steps
 
 
-class CustomTBCallback(TensorBoardCallback):
-    # the following method is introduced to prevent double logging
-    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        # Log
-        control.should_log = False
-
-        # Evaluate
-        if (
-                args.evaluation_strategy == IntervalStrategy.STEPS
-                and state.global_step % args.eval_steps == 0
-                and args.eval_delay <= state.global_step
-        ):
-            control.should_log = True
-            control.should_evaluate = True
-
-        # Save
-        if (
-                args.save_strategy == IntervalStrategy.STEPS
-                and args.save_steps > 0
-                and state.global_step % args.save_steps == 0
-        ):
-            control.should_save = True
-
-        # End training
-        if state.global_step >= state.max_steps:
-            control.should_training_stop = True
-
-        return control
+# class CustomTBCallback(TensorBoardCallback):
+#     # the following method is introduced to prevent double logging
+#     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+#         # Log
+#         control.should_log = False
+#
+#         # Evaluate
+#         if (
+#                 args.evaluation_strategy == IntervalStrategy.STEPS
+#                 and state.global_step % args.eval_steps == 0
+#                 and args.eval_delay <= state.global_step
+#         ):
+#             control.should_log = True
+#             control.should_evaluate = True
+#
+#         # Save
+#         if (
+#                 args.save_strategy == IntervalStrategy.STEPS
+#                 and args.save_steps > 0
+#                 and state.global_step % args.save_steps == 0
+#         ):
+#             control.should_save = True
+#
+#         # End training
+#         if state.global_step >= state.max_steps:
+#             control.should_training_stop = True
+#
+#         return control
 
 
 collator = DecisionTransformerSkatDataCollator(dataset["train"])
@@ -572,7 +557,7 @@ config = DecisionTransformerConfig(
 # how is the vocabulary defined?
 
 
-# pretrained_model = TrainableDT.from_pretrained("./pretrained_models/Wed_Aug_23_09-41-40_2023-games_100-0-sampled-unexpectedly_well")
+# pretrained_model = TrainableDT.from_pretrained("./pretrained_models/Tue_Aug_22_22-42-38_2023-games_1000-0-sampled")
 # model = pretrained_model
 
 model = TrainableDT(config)
@@ -580,32 +565,32 @@ model = TrainableDT(config)
 # if torch.cuda.device_count() > 1:
 #     model = torch.nn.DataParallel(model)
 
-model.to(device)
+# model.to(device)
 
 training_args = TrainingArguments(
-    # report_to=["tensorboard"],
+    report_to=["tensorboard"],
     output_dir="training_output/",
     remove_unused_columns=False,
-    num_train_epochs=1000,
-    per_device_train_batch_size=32,
+    num_train_epochs=240,
+    # per_device_train_batch_size=32,
     learning_rate=1e-3,
     weight_decay=1e-4,
     warmup_ratio=0.1,
     optim="adamw_torch",
     max_grad_norm=0.1,
-    logging_steps=10,
+    logging_steps=20,
     logging_dir=rf"./training-logs/"
                 rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_"
                 rf"{games_to_load.stop}-{games_to_load.start}-sampled",
 
-    # do_eval=True,
-    # evaluation_strategy="steps",
-    # eval_steps=50,
+    do_eval=True,
+    evaluation_strategy="steps",
+    eval_steps=100,
 
     # no_cuda=True,
 )
 
-tensorboard_callback = CustomTBCallback()
+# tensorboard_callback = CustomTBCallback()
 
 trainer = DTTrainer(  # CustomDTTrainer
     model=model,
@@ -614,7 +599,7 @@ trainer = DTTrainer(  # CustomDTTrainer
     eval_dataset=dataset["test"],
     data_collator=collator,
     # compute_metrics=compute_metrics,  # is not reachable without labels
-    callbacks=[tensorboard_callback]
+    # callbacks=[tensorboard_callback]
 )
 
 print("Training...")
@@ -636,6 +621,8 @@ trainer.train()
 # collator.games_ind = (game_index + 1, game_index + 2)
 
 training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
+
+trainer.data_collator = DecisionTransformerSkatDataCollator(dataset["test"])
 
 evaluation_results = trainer.evaluate()
 

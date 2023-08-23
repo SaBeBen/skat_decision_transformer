@@ -15,6 +15,10 @@ data_pipeline/.ipynb_checkpoints
 # all data directories
 /data/
 data/**/*.CSV
+/datasets/
+
+# generated graphics as they can be generated with the analysis
+/data_analysis/graphics/
 
 # virtual environment
 .venv
