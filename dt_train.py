@@ -31,7 +31,7 @@ from numba import cuda
 # gameID 4: index 5
 game_index = 5
 
-games_to_load = slice(0, 100)
+games_to_load = slice(0, 10)
 
 # indices of games to train on
 # games_train_ind = (0, 700)
@@ -112,7 +112,7 @@ class DecisionTransformerSkatDataCollator:
         # weighted rewards are in the data set (get_states_actions_rewards)
         discount_cumsum = np.zeros_like(x)
         discount_cumsum[-1] = x[-1]
-        for t in reversed(range(x.shape[0] - 1)):
+        for t in reversed(range(discount_cumsum.shape[0] - 1)):
             # gamma as a discount factor to differ rewards temporarily
             discount_cumsum[t] = x[t] + gamma * discount_cumsum[t + 1]
         return discount_cumsum
@@ -131,6 +131,10 @@ class DecisionTransformerSkatDataCollator:
             p=self.p_sample,  # reweights, so we sample according to timesteps
         )
 
+        # the batch size is per_device_train_batch_size*num_of_gpu, and the collator
+        # makes batches of batch_size every dataset_size//batch_size times,
+        # with the batch size being dataset_size%batch_size at the last call, just for the remaining data
+
         # a batch of dataset features
         s, a, r, rtg, timesteps, mask, big_action_mask = [], [], [], [], [], [], []
 
@@ -142,7 +146,13 @@ class DecisionTransformerSkatDataCollator:
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
             #  jumping randomly into a surrendered game could not work well
-            si = random.randint(0, len(feature["rewards"]) - 1)  # 0
+            si = random.randint(1, len(feature["rewards"]))  # 0
+
+            # Done:
+            #  - fixed frame of 12 timesteps
+            #  we want to have a history starting from the beginning of the game
+            #  and include the rtgs from the last reward
+            #  we had an implementation starting from the last timestep looking back
 
             #  does the self attention have to model the knowledge over time (mask with 1 from left to right)
             #  or chase the reward (mask with 1s from right to left)
@@ -151,30 +161,26 @@ class DecisionTransformerSkatDataCollator:
 
             # get sequences from dataset
             s.append(np.array(feature["states"]
-                              [si:self.max_len]).reshape((1, -1, self.state_dim)))
-            a.append(np.array(feature["actions"][si:self.max_len]).reshape((1, -1, self.act_dim)))
-            r.append(np.array(feature["rewards"][si:self.max_len]).reshape((1, -1, 1)))
+                              [0:si]).reshape((1, -1, self.state_dim)))
+            a.append(np.array(feature["actions"][0:si]).reshape((1, -1, self.act_dim)))
+            r.append(np.array(feature["rewards"][0:si]).reshape((1, -1, 1)))
 
-            timesteps.append(np.arange(si, si + s[-1].shape[1]).reshape(1, -1))
+            timesteps.append(np.arange(0, s[-1].shape[1]).reshape(1, -1))
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
-                self._discount_cumsum(np.array(feature["rewards"][si:]), gamma=0.99)[: s[-1].shape[1]
+                self._discount_cumsum(np.array(feature["rewards"]), gamma=1)[: s[-1].shape[1]
                 ].reshape(1, -1, 1)  # TODO check the +1 removed here
             )
             if rtg[-1].shape[1] < s[-1].shape[1]:
                 print("if true")
                 rtg[-1] = np.concatenate([rtg[-1], np.zeros((1, 1, 1))], axis=1)
 
-            # padding and state + reward normalization
-            tlen = s[-1].shape[1]  # ind % 12
+            tlen = s[-1].shape[1]
 
             # states, actions, rewards are already padded
 
             padding = np.zeros((1, self.max_len - tlen, self.state_dim))
             s[-1] = np.concatenate([padding, s[-1]], axis=1)
-
-            # state normalization
-            # s[-1] = (s[-1] - self.state_mean) / self.state_std
 
             a[-1] = np.concatenate(
                 [np.zeros((1, self.max_len - tlen, self.act_dim)), a[-1]],
@@ -185,7 +191,6 @@ class DecisionTransformerSkatDataCollator:
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1)  # / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
             mask.append(np.concatenate([np.zeros((1, self.max_len - tlen)), np.ones((1, tlen))], axis=1))
-            # big_action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
 
         s = torch.from_numpy(np.concatenate(s, axis=0)).float()
         a = torch.from_numpy(np.concatenate(a, axis=0)).float()
@@ -194,7 +199,6 @@ class DecisionTransformerSkatDataCollator:
         rtg = torch.from_numpy(np.concatenate(rtg, axis=0)).float()
         timesteps = torch.from_numpy(np.concatenate(timesteps, axis=0)).long()
         mask = torch.from_numpy(np.concatenate(mask, axis=0)).float()
-        # torch.from_numpy(np.concatenate(big_action_mask, axis=0)).float()  #
 
         return {
             "states": s,
@@ -329,7 +333,6 @@ class TrainableDT(DecisionTransformerModel):
 
         # loss += sum(sum(abs(action_preds_forb))) * 0.1
 
-
         prob_correct_action, rate_wrong_action_taken = -1, -1
 
         # calculate advanced metrics only during evaluation to increase training speed
@@ -365,24 +368,30 @@ class TrainableDT(DecisionTransformerModel):
             # rate of wrong cards being chosen
             rate_wrong_action_taken = amount_wrong_actions_taken / action_targets.shape[0]
 
-        # TODO: problem of compressed states: indexing of cards and determining length of cards is difficult
+        # problem of compressed states: indexing of cards and determining length of cards is difficult
         #  possible solution: timesteps
-        # timesteps = kwargs["timesteps"]
-        # timesteps.count_nonzero(dim=1)
-        # action_taken
-        # states = kwargs["states"]
-        #
-        # # states_trump_enc = states[:,:,5:9]
-        # state_cards = states[:, :, -max_hand_len:]
-        #
-        # state_cards
-        # selected_cards = action_taken   # already indices
+
+        # calculate subset of illegal actions:
+        # actions selecting out of hand cards.
+        # Example:
+        # In the third trick (without Skat putting), only 7 cards can be selected,
+        # actions could try to falsely select a 9th card
+        # amount_past_tricks = kwargs["timesteps"][:, -1]
+        timesteps = kwargs["timesteps"]
+        hand_card_length = 12 - timesteps.reshape(-1)[attention_mask.reshape(-1) > 0]
+
+        actions_oob = torch.nonzero(torch.div(action_taken, hand_card_length, rounding_mode='trunc'))
+        # predictions have to be passed as tensors
+        rate_oob_actions = Tensor([actions_oob.shape[0] / action_targets.shape[0]])
 
         # TODO: include rules by looking at first open card and colour (including trump_enc), length
         # prob_illegal_action =
 
-        return {"loss": loss, "probability_of_correct_action": prob_correct_action,
-                "rate_wrong_action_taken": rate_wrong_action_taken}
+        return {"loss": loss,
+                "probability_of_correct_action": prob_correct_action,
+                "rate_wrong_action_taken": rate_wrong_action_taken,
+                "rate_oob_actions": rate_oob_actions
+                }
 
     def original_forward(self, **kwargs):
         return super().forward(**kwargs)
@@ -420,7 +429,8 @@ class DTTrainer(Trainer):
             output.metrics.update(
                 {"eval_loss: ": round(float(output.predictions[0][-1]), 4),
                  "prob_correct_action": round(float(output.predictions[1][-1]), 4),
-                 "rate_wrong_action_taken": round(float(output.predictions[2][-1]), 4)
+                 "rate_wrong_action_taken": round(float(output.predictions[2][-1]), 4),
+                 "rate_oob_actions": round(float(output.predictions[3]), 4)
                  }
             )
         else:
@@ -428,7 +438,8 @@ class DTTrainer(Trainer):
             output.metrics.update(
                 {"eval_loss: ": round(float(output.predictions[0]), 4),
                  "prob_correct_action": round(float(output.predictions[1]), 4),
-                 "rate_wrong_action_taken": round(float(output.predictions[2]), 4)
+                 "rate_wrong_action_taken": round(float(output.predictions[2]), 4),
+                 "rate_oob_actions": round(float(output.predictions[3]), 4)
                  }
             )
 
@@ -478,9 +489,10 @@ class DTTrainer(Trainer):
         outputs["probability_of_correct_action"] = round(float(outputs["probability_of_correct_action"]), 4)
         outputs["loss"] = round(float(loss), 4)
         outputs["rate_wrong_action_taken"] = round(float(outputs["rate_wrong_action_taken"]), 4)
+        outputs["rate_oob_actions"] = round(float(outputs["rate_oob_actions"]), 4)
 
         # problem of double logging. _maybe_log_save_evaluate logs already, but does not get passed additional metrics
-        # workaround to log during training
+        # this is a workaround to log own metrics during training
         if self.state.global_step == 1 and self.args.logging_first_step:
             self.control.should_log = True
         if self.args.logging_strategy == IntervalStrategy.STEPS and self.state.global_step % self.args.logging_steps == 0:
@@ -491,16 +503,11 @@ class DTTrainer(Trainer):
 
             tr_loss_step = round(float(loss.detach() / self.args.gradient_accumulation_steps), 4)
 
+            # define own metrics
             metrics["tr_loss"] = tr_loss_step
-            # metrics["learning_rate"] = self._get_learning_rate()
-
-            # self._total_loss_scalar += tr_loss_step
-            # self._globalstep_last_logged = self.state.global_step
-            # self.store_flos()
-
             metrics["probability_of_correct_action"] = outputs["probability_of_correct_action"]
-            # logs["loss"] = outputs["loss"]
             metrics["rate_wrong_action_taken"] = outputs["rate_wrong_action_taken"]
+            metrics["rate_oob_actions"] = outputs["rate_oob_actions"]
 
             self.log(metrics)
 
@@ -583,9 +590,9 @@ training_args = TrainingArguments(
                 rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_"
                 rf"{games_to_load.stop}-{games_to_load.start}-sampled",
 
-    do_eval=True,
-    evaluation_strategy="steps",
-    eval_steps=100,
+    # do_eval=True,
+    # evaluation_strategy="steps",
+    # eval_steps=100,
 
     # no_cuda=True,
 )
@@ -599,7 +606,7 @@ trainer = DTTrainer(  # CustomDTTrainer
     eval_dataset=dataset["test"],
     data_collator=collator,
     # compute_metrics=compute_metrics,  # is not reachable without labels
-    # callbacks=[tensorboard_callback]
+    # callbacks=[tensorboard_callback]  # here or in "report_to" of args
 )
 
 print("Training...")
@@ -645,9 +652,12 @@ print(evaluation_results)
 #
 # # env = environment.Env()
 #
+
+# ------------------------------------------------------------------------------------
+#                           Interactive Implementation
 #
 # # Function that gets an action from the model using autoregressive prediction
-# # with a window of the previous 20 timesteps.
+# # with a window of the previous 20 timesteps. We only need a maximum of 12 timesteps
 # def get_action(model, states, actions, rewards, returns_to_go, timesteps):
 #     # This implementation does not condition on past rewards
 #
@@ -681,7 +691,7 @@ print(evaluation_results)
 #         attention_mask=attention_mask,
 #         return_dict=False, )
 #     return action_preds[0, -1]
-#
+
 #
 # scale = 1
 #
@@ -728,7 +738,7 @@ print(evaluation_results)
 #
 #         # predicting the action to take
 #         action_pred = get_action(model,
-#                                  states,  # - state_mean) / state_std,
+#                                  states,
 #                                  actions,
 #                                  rewards,
 #                                  target_return,

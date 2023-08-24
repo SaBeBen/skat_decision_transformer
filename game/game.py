@@ -1,3 +1,4 @@
+from game.game_variant import GameVariantNull
 from model.card import Card
 from model.player import Player
 
@@ -52,7 +53,6 @@ class Game:
         # set trick leader for next round
         self.trick.leader = trick_winner
 
-
     def get_dealer(self):
         return self.players[self.dealer]
 
@@ -71,8 +71,15 @@ class Game:
                 return player
 
     def has_declarer_won(self):
-        # TODO check overbid and bid variants like schwarz
-        return self.get_declarer().sum_trick_values() > 60
+        # check overbid and bid variants
+        if isinstance(self.game_variant, GameVariantNull):
+            return self.get_declarer().sum_trick_values() == 0
+        if self.game_variant.get_level() > 2:
+            return self.get_declarer().sum_trick_values() == 120
+        elif self.game_variant.get_level == 1:
+            return self.get_declarer().sum_trick_values() >= 30
+        else:
+            return self.get_declarer().sum_trick_values() > 60
 
     def create_deck(self):
         for suit in Card.Suit:

@@ -198,15 +198,22 @@ class Env:
         return self.state
 
     def get_game_points(self):
-        game_points = 94
-        # TODO: check the game variant
-        # self.trump_enc
-        # TODO: chekc if hand was played
-        # self.hand
-        # TODO: calculate the card points
-        # card_points
+        game_points = 0
 
-        # game_points =
+        if sum(self.trump_enc) == 0:
+            game_points = self.game.game_variant.get_level()
+        else:
+            if sum(self.trump_enc) == 4:
+                base_value = 24
+            else:
+                base_value = 9 + self.trump_enc.index(1)
+
+            level = 1 + self.game.game_variant.get_level()
+            # + peaks
+
+            won = 1 if (self.game.has_declarer_won() & self.current_player == self.game.get_declarer()) | (
+                not self.game.has_declarer_won() & self.current_player != self.game.get_declarer()) else -1
+            game_points = base_value * level * won
 
         return game_points
 
@@ -221,6 +228,8 @@ class Env:
             # shuffles and gives out cards
             self.state_machine.handle_action(StartGameAction())
 
+            self.current_player = self.game.players[current_player_id]
+
             highest_score, soloist_pos, i = 0, 0, 0
 
             soloist = None
@@ -234,8 +243,6 @@ class Env:
                     soloist = player
                     trump = trump_player
 
-            self.current_player = soloist
-            # soloist.type = Player.Type.DECLARER
             self.state_machine.handle_action(BidCallAction(soloist, 18))
             self.state_machine.handle_action(
                 BidPassAction(self.game.players[(soloist.get_id()) % 3], 18))  # id starts at 1
@@ -246,6 +253,33 @@ class Env:
             self.current_player.cards.sort()
 
             self.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(trump)))
+            self.trump_enc = get_trump_enc(trump)
+
+            # determine the position of players
+            pos_p = [0, 0, 0]
+
+            if self.game.get_declarer().get_id() == current_player_id:
+                # initialise positions of defender as -1
+                pos_p[(current_player_id + 1) % 3], pos_p[(current_player_id + 2) % 3] = -1, -1
+            elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
+                pos_p[(current_player_id + 1) % 3] = -1
+                pos_p[(current_player_id + 2) % 3] = 1
+            else:
+                pos_p[(current_player_id + 1) % 3] = 1
+                pos_p[(current_player_id + 2) % 3] = -1
+
+            self.pos_p = pos_p
+        else:
+            initialise_hand_cards(meta_and_cards_game,
+                                  self.current_player,
+                                  self.game.players[current_player_id + 1 % 3],
+                                  self.game.players[current_player_id + 2 % 3])
+
+            self.pos_p = game_first_state[:3]
+
+            self.trump_enc = game_first_state[3:6]
+
+            self.current_player = self.game.players[current_player_id]
 
         # else:
         # StartGameAction not necessary with an already initialised game
@@ -268,17 +302,6 @@ class Env:
         # self.hand = game_env.hand
 
         # game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
-
-        self.pos_p = game_first_state[:3]
-
-        self.trump_enc = game_first_state[3:6]
-
-        self.current_player = self.game.players[current_player_id]
-
-        initialise_hand_cards(meta_and_cards_game,
-                              self.current_player,
-                              self.game.players[current_player_id + 1 % 3],
-                              self.game.players[current_player_id + 2 % 3])
 
         # # Problem: Karten der anderen Spieler
         # if self.pos_p[0] == 0:
@@ -429,7 +452,8 @@ class Env:
                     reward = Card.get_value(self.skat_down[0])
 
                     self.score[0] = Card.get_value(self.skat_down[0])
-                    # TODO: self.game.skat instead of init in data pipeline, in general: optimize variables
+                    # TODO: maybe self.game.skat instead of init in data pipeline,
+                    #  in general: optimize variables
 
                 try:
                     self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[0]))
@@ -480,7 +504,7 @@ class Env:
             if self.game.trick.get_current_player() == self.current_player:
                 # in position of first player, there are no open cards
                 open_cards = [0] * card_dim + [0] * card_dim
-            if self.game.trick.get_next_player(self.current_player) == self.current_player:
+            elif self.game.trick.get_next_player(self.current_player) == self.current_player:
                 # in position of the second player, there is one open card
                 open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * (self.trick) - 1]) + [0] * card_dim
             else:
@@ -536,7 +560,7 @@ class Env:
             if self.game.trick.get_current_player() == self.current_player:
                 # in position of first player, there are no open cards
                 open_cards = [0] * card_dim + [0] * card_dim
-            if self.game.trick.get_next_player(self.current_player) == self.current_player:
+            elif self.game.trick.get_next_player(self.current_player) == self.current_player:
                 # in position of the second player, there is one open card
                 open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * (self.trick) - 1]) + [0] * card_dim
             else:

@@ -6,6 +6,10 @@ from model.card import Card
 # Abstract game variant class
 # ------------------------------------------------------------
 class GameVariant(metaclass=ABCMeta):
+
+    def __int__(self, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
+        raise NotImplementedError()
+
     @abstractmethod
     def compare_jacks(self, jack_higher, jack_lower):
         raise NotImplementedError()
@@ -34,11 +38,20 @@ class GameVariant(metaclass=ABCMeta):
 
         return highest_card
 
+    def get_level(self):
+        raise NotImplementedError()
+
 
 # ------------------------------------------------------------
 # Concrete game variant class for grand game
 # ------------------------------------------------------------
 class GameVariantGrand(GameVariant):
+    def __int__(self, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
+        self.hand = hand
+        self.scheider_called = schneider_called | schwarz_called | ouvert
+        self.schwarz_called = schwarz_called | ouvert
+        self.ouvert = ouvert
+
     def compare_jacks(self, jack_higher, jack_lower):
         if jack_higher.face is not Card.Face.JACK:
             raise TypeError(jack_higher + " is no jack")
@@ -81,14 +94,18 @@ class GameVariantGrand(GameVariant):
     def get_trump(self):
         return 24
 
+    def get_level(self):
+        return self.ouvert + self.schwarz_called + self.scheider_called + self.hand
+
 
 # ------------------------------------------------------------
 # Concrete game variant class for suit game
 # ------------------------------------------------------------
 class GameVariantSuit(GameVariantGrand):
-    def __init__(self, trump_suit):
+    def __init__(self, trump_suit, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
         # expects name of trump suit
         self.trump_suit = trump_suit
+        super().__init__(hand, schneider_called, schwarz_called, ouvert)
 
     def compare_cards(self, card_higher, card_lower):
         if self.is_trump(card_higher) and not self.is_trump(card_lower):
@@ -112,6 +129,10 @@ class GameVariantSuit(GameVariantGrand):
 # Concrete game variant class for null game
 # ------------------------------------------------------------
 class GameVariantNull(GameVariant):
+    def __int__(self, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
+        self.hand = hand
+        self.ouvert = ouvert
+
     def compare_jacks(self, jack_higher, jack_lower):
         if jack_higher.face is not Card.Face.JACK:
             raise TypeError(jack_higher + " is no jack")
@@ -136,3 +157,14 @@ class GameVariantNull(GameVariant):
 
     def get_trump(self):
         return 0
+
+    def get_level(self):
+        if self.hand:
+            if self.ouvert:
+                return 59
+            else:
+                return 35
+        elif self.ouvert:
+            return 46
+        else:
+            return 23

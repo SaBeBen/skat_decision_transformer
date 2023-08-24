@@ -1,52 +1,91 @@
-{bl_skattisch, bl_skattisch_kf, bl_skattisch_spiel} for bl, dm, dt, rl, wm
+# Structure of Data
 
 The used data consists out of games played at the 
-world championship (wc), 
-
-German league “Bundesliga” (bl), 
-
-German championship (gc) (in German “deutsche Meisterschaft”), 
-
-a DOSKV championship where only members can participate, more regional (rc) (rl) 
-
-and a German tandem championship (gtc). 
+world championship (wc), German league “Bundesliga” (bl), German championship (gc), a DOSKV championship where only members can participate (rc)
+and a German tandem championship (gtc).
 
 All of them use the same set of rules. 
 As the bl is played in teams, single players play more defensively. 
 Therefore, there are fewer wins and fewer grands played.
 
-Consequently, the win rate in the bl is slightly worse in comparison with dm, wc and dt. 
+Consequently, the win rate in the bl is slightly worse in comparison with gc, wc and gtc. 
+
+For each championship, there are three tables with following suffixes: 
+- _skattisch: contains information about the respective championship Skat tables
+- _skattisch_kf: contains information about the card sequence of the games
+- _skattisch_spiel: contains information about metadata of the players and the game, each player’s hand and the Skat before pick up 
 
 [comment]: <> (insert win rate table)
 
-Each dataset is partitioned into three tables, one table containing information about the table where the game is played, one with each game’s description including metadata of the players and the game, each player’s hand and the Skat.
 
-In the following, the tables will be explained more in detail.
+In the following, the entries of those tables will be explained more in detail.
 
-Table about the table
+# Data about the Skat table
 
-Each table entry consists of a table ID, a name, a number, the ID as a single integer of the first, second, third and if given of the fourth player. Then, the players non-integer ID including their initials and at least one number follows. The last entries are made of a date, an ID of the server and the series to which the table belongs to.
-  
+Each table entry consists of a 
+- "IDtable" (self-explanatory)
+- "Name" (self-explanatory)
+- "Number" (self-explanatory)
+- "PlayerID1" - "PlayerID4": ID as a single integer of the first, second, third and if given of the fourth player. 
+- "Player1" - "Player4": Then, the players non-integer ID including their initials and at least one number follows. 
+- "Date": the date the table was played
+- "IDVServer": ID of the server  
+- "Series": the series to which the table belongs to.
 
-Pl, "PlayerID2", "PlayerID3", "PlayerID4",
-"Player1", "Player2", "Player3", "Player4", "Date", "IDVServer", "Series"
+The data about the Skat tables is irrelevant for our application.
 
-Card sequence table
+# Card sequence table
 
-"GameID", "Sd1", "Sd2", "CNr0", "CNr1", "CNr2", "CNr3", "CNr4", "CNr5", "CNr6", "CNr7",
-"CNr8", "CNr9", "CNr10", "CNr11", "CNr12", "CNr13", "CNr14", "CNr15", "CNr16", "CNr17",
-"CNr18", "CNr19", "CNr20", "CNr21", "CNr22", "CNr23", "CNr24", "CNr25", "CNr26", "CNr27",
-"CNr28", "CNr29", "CNr30", "CNr31", "SurrenderedAt"
+The card sequence table is identified by a game ID. 
+- "Sd1", "Sd2": The put down Skat cards
+- "CNr0" - "CNr31": The following 32 columns each are fixed representation of a card:
+  - They are sorted by colors in the order cross, spades, hearts, diamonds
+  - Within the colours the order is from Ace, King, Queen, Jack over ten to seven
+  - For instance, card number (CNr) 0 is the Ace of cross, CNr 11 represents the jack of spades
+  - The entry of the columns in each game index the position in the game when the card was played
+  - Example: CNr 3 entry: 18 -> The Jack of cross (CNr 3) was played as the 18th card 
+  - CNrs with the entries 30 and 31 are the put Skat 
+- "SurrenderedAt"*: The last entry is the position at which the game was surrendered, if this value is "-1", the game was not surrendered
 
-Game table
+*Note: the entries "SurrenderedAt" and "Surrendered" of the game table do not logically match, which can be explained by not consequently log redundantly. The entry "SurrenderedAt" is set correctly in surrendered games 
 
-"GameID", "IDGame", "IDTable", "IDVServer", "StartTime", "EndTime", "PlayerFH",
-"PlayerMH", "PlayerBH", "Cards", "CallValueFH", "CallValueMH", "CallValueBH", "PlayerID", "Game",  "With", "Without", "Hand", "Schneider", "SchneiderCalled", "Schwarz",
-"SchwarzCalled", "Overt", "PointsPlayer", "Won", "Miscall", "CardPointsPlayer", "AllPassed",
-"Surrendered", "PlayerPosAtTableFH", "PlayerPosAtTableMH", "PlayerPosAtTableBH"
+# Game table
+
+The game table consists of the entries
+
+- "GameID": the GameID
+- "IDGame": IDGame, another ID which exists due to the config of the database 
+- "IDTable": the table of the game 
+- "IDVServer": the server of the game
+- "StartTime", "EndTime" (self-explanatory)
+- "PlayerFH","PlayerMH","PlayerBH": Player in forehand, mid-hand and rear-hand
+- "Card1"-"Card32": 
+  - Card1-Card10 belong to forehand, 
+  - Card11-20 to mid-hand, 
+  - Card21-30 to rear-hand
+  - Card 31-32 Skat before pick up 
+- "CallValueFH", "CallValueMH", "CallValueBH": the call values of the players**
+- "PlayerID": the ID of the player declaring a game
+- "Game": the game played, can take on following values
+  - 0: Nobody played (all passed)
+  - 9, 10, 11, 12: Diamonds, Hearts, Spades, Cross
+  - 24: Grand
+  - 23, 35, 46, 59: Null, Null hand, Null ouvert, Null ouvert hand, respectively
+- "With", "Without": The highest trumps 
+- "Hand", "Schneider", "SchneiderCalled", "Schwarz", "SchwarzCalled", "Ouvert": binary encoded playing mode
+- "PointsPlayer": resulting points of player (tournament count)
+- "Won", "Miscall": binary encodings of won and miscalled
+- "CardPointsPlayer": the final points of the soloist's cards
+- "AllPassed": whether all passed
+- "Surrendered": whether the game was surrendered*
+- "PlayerPosAtTableFH", "PlayerPosAtTableMH", "PlayerPosAtTableBH": the players positions at the table**
+
+**Note: is inconsistent in database due to historic reasons, not relevant for our scope
 
 
- FIXED: problem of context length max = 1024: see Solution 3
+
+
+ # FIXED: problem of context length max = 1024: see Solution 3
 
  atm of Problem (each Skat as action, card_dim 5, cards on hand): episode length = 105 * 12 = 1260
 
