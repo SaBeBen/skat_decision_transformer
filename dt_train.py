@@ -1,33 +1,37 @@
+import argparse
 import math
 import random
+# import resource
 import time
 from dataclasses import dataclass
-from math import floor
 from typing import Dict, Union, Tuple, Optional, List, Any
 
 import numpy as np
 import pandas as pd
 import torch
-from transformers.integrations import TensorBoardCallback
 
-from datasets import Dataset, DatasetDict, load_metric, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from torch import nn
 from torch import Tensor
 from sklearn.model_selection import train_test_split
 
-from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig, \
-    TrainerCallback, TrainerState, TrainerControl
+from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
 
 from transformers.models.decision_transformer.modeling_decision_transformer import DecisionTransformerOutput
-from transformers.trainer_callback import CallbackHandler
 from transformers.trainer_utils import speed_metrics, IntervalStrategy
 
 import data_pipeline
 import environment
 
-from numba import cuda
 
 # %%
+# def set_memory_limit(limit_gb):
+#     limit_bytes = limit_gb * 1024 * 1024 * 1024  # Convert MB to bytes
+#     resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+#
+#
+# set_memory_limit(16)
+
 # gameID 4: index 5
 game_index = 5
 
@@ -59,7 +63,7 @@ act_dim = 12
 card_dim = 5
 
 # for padding of hand_cards, it is the maximum size with a compressed card representation
-max_hand_len = 16 + act_dim  # 12 * card_dim  # 28
+max_hand_len = 16 + act_dim  # 12 * card_dim
 
 # position co-player (3) + score (2) + trump (4) + last trick (3 * card_dim)
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
@@ -251,8 +255,6 @@ class TrainableDT(DecisionTransformerModel):
         action_embeddings = action_embeddings + time_embeddings
         returns_embeddings = returns_embeddings + time_embeddings
 
-        # action_embeddings = action_embeddings * action_mask
-
         # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
         # which works nice in an autoregressive sense since states predict actions
         stacked_inputs = (
@@ -262,7 +264,6 @@ class TrainableDT(DecisionTransformerModel):
         )
         stacked_inputs = self.embed_ln(stacked_inputs)
 
-        # TODO: change action attention mask action_mask, prob not here
         # to make the attention mask fit the stacked inputs, have to stack it as well
         stacked_attention_mask = (
             torch.stack((attention_mask, attention_mask, attention_mask), dim=1)
@@ -289,6 +290,11 @@ class TrainableDT(DecisionTransformerModel):
         return_preds = self.predict_return(x[:, 2])  # predict next return given state and action
         state_preds = self.predict_state(x[:, 2])  # predict next state given state and action
         action_preds = self.predict_action(x[:, 1])  # predict next action given state
+
+        action_preds = action_preds[attention_mask > 0]
+        sm = nn.Softmax(dim=1)
+        action_preds = sm(action_preds)
+
         if not return_dict:
             return (state_preds, action_preds, return_preds)
 
@@ -302,44 +308,40 @@ class TrainableDT(DecisionTransformerModel):
         )
 
     def forward(self, **kwargs):
-        # action_mask = [np.concatenate([np.ones((1, 10 - t)), np.zeros((1, t))], axis=1) for t in range(0, 10)]
-        # action_mask = torch.from_numpy(np.concatenate(action_mask, axis=0)).float()
-
         output = self.originalForward(**kwargs)  # self.originalForward(**kwargs)  # super().forward(**kwargs)
         # add the DT loss
         action_preds = output[1]
         action_targets = kwargs["actions"]
         attention_mask = kwargs["attention_mask"]
-        act_dim = action_preds.shape[2]
+        act_dim = action_preds.shape[1]  # 2
 
         # exclude actions that are not attended to
-        action_preds = action_preds.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
+        action_preds = action_preds.reshape(-1, act_dim)  # [attention_mask.reshape(-1) > 0]
         action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
 
+        # TODO: rather output softmax predictions and maybe have a sm layer (careful with attn mask)
+        #  or calculate everything after prediction (closer to original implementation)
         # cross entropy loss
         cross_ent_fct = nn.CrossEntropyLoss()
 
-        cross_ent_loss = cross_ent_fct(action_preds, action_targets)
+        # if the softmax is already applied in original forward
+        nll_loss_fct = nn.NLLLoss()
+        cross_ent_loss = nll_loss_fct(torch.log(action_preds), torch.argmax(action_targets, dim=1))
+
+        # cross_ent_loss = cross_ent_fct(action_preds, action_targets)
 
         loss = cross_ent_loss
-
-        # forbidden_action_mask = [np.concatenate([np.zeros((1, 10-t)), np.ones((1, t))], axis=1)
-        #                          for t in range(10 - action_preds_sm.shape[0], 10)]
-        # forbidden_action_mask = torch.from_numpy(np.concatenate(forbidden_action_mask, axis=0)).float()
-        #
-        # mask2 = torch.from_numpy(np.zeros((1, action_preds_sm.shape[0] * action_preds_sm.shape[1])).reshape(action_preds_sm.shape[0], action_preds_sm.shape[1]))
-        #
-        # action_preds_forb = action_preds_sm * forbidden_action_mask
-
-        # loss += sum(sum(abs(action_preds_forb))) * 0.1
 
         prob_correct_action, rate_wrong_action_taken = -1, -1
 
         # calculate advanced metrics only during evaluation to increase training speed
         if True:  # not self.training:
             # only predicts the prob in context of 12 cards
-            soft_max = nn.Softmax(dim=1)
-            action_pred_sm = soft_max(action_preds)
+            # soft_max = nn.Softmax(dim=1)
+            # action_pred_sm = soft_max(action_preds)
+
+            # if softmax is already applied on preds
+            action_pred_sm = action_preds
 
             prob_each_act_correct = action_pred_sm * action_targets
 
@@ -368,9 +370,6 @@ class TrainableDT(DecisionTransformerModel):
             # rate of wrong cards being chosen
             rate_wrong_action_taken = amount_wrong_actions_taken / action_targets.shape[0]
 
-        # problem of compressed states: indexing of cards and determining length of cards is difficult
-        #  possible solution: timesteps
-
         # calculate subset of illegal actions:
         # actions selecting out of hand cards.
         # Example:
@@ -393,8 +392,8 @@ class TrainableDT(DecisionTransformerModel):
                 "rate_oob_actions": rate_oob_actions
                 }
 
-    def original_forward(self, **kwargs):
-        return super().forward(**kwargs)
+    # def original_forward(self, **kwargs):
+    #     return super().forward(**kwargs)
 
 
 class DTTrainer(Trainer):
@@ -561,7 +560,6 @@ config = DecisionTransformerConfig(
     resid_pdrop=0.1,
     max_length=MAX_EPISODE_LENGTH,
 )
-# how is the vocabulary defined?
 
 
 # pretrained_model = TrainableDT.from_pretrained("./pretrained_models/Tue_Aug_22_22-42-38_2023-games_1000-0-sampled")
@@ -800,3 +798,36 @@ print(evaluation_results)
 #
 #             print(f"Avg probability of correct action: {prob_correct_action}")
 #             break
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(prog='Skat_Decision_Transformer_trainer',
+                                     description='Trains a Decision Transformer on a championship dataset using '
+                                                 'Huggingface´s Decision Transformer.'
+                                                 'A GPT2 model uses causal self-attention for training.'
+                                                 'After training it autoregressively predicts the next action.',
+                                     epilog='For more information, we refer to the underlying paper '
+                                            '"Decision Transformer: Reinforcement Learning via Sequence Modeling" and'
+                                            'their implementation '
+                                            'https://github.com/kzl/decision-transformer/tree/master, as well as'
+                                            ' Huggingface')
+    parser.add_argument('--championship', '-cs', type=str, default='wc', choices=['wc', 'gc', 'gtc', 'bl', 'rc'],
+                        help='dataset of championship to select from')
+    # parser.add_argument('--data_format', type=str, default='mixed', choices=['one-hot', 'mixed'])
+    parser.add_argument('--games', type=tuple, default=(0, 100),
+                        help='the games to load (loads from every player´s perspective)')
+    parser.add_argument('--point_rewards', type=bool, default=False,
+                        help='whether to add points of the game to the card points as a reward')
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--n_layer', type=int, default=2, help='number of hidden layers')
+    parser.add_argument('--n_head', type=int, default=1, help='number of attention heads')
+    parser.add_argument('--activation_function', type=str, default='tanh',
+                        help='the activation function to use in the GPT2Model')
+    parser.add_argument('--dropout', type=float, default=0.1)
+    parser.add_argument('--learning_rate', '-lr', type=float, default=1e-3)
+    parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
+    parser.add_argument('--warmup_steps', type=int, default=10000)
+    # parser.add_argument('--num_eval_episodes', type=int, default=100)
+    # parser.add_argument('--num_steps_per_iter', type=int, default=10000)
+    parser.add_argument('--device', type=str, default='cuda')
+
+    args = parser.parse_args()

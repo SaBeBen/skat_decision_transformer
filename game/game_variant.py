@@ -105,7 +105,10 @@ class GameVariantSuit(GameVariantGrand):
     def __init__(self, trump_suit, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
         # expects name of trump suit
         self.trump_suit = trump_suit
-        super().__init__(hand, schneider_called, schwarz_called, ouvert)
+        self.hand = hand
+        self.scheider_called = schneider_called | schwarz_called | ouvert
+        self.schwarz_called = schwarz_called | ouvert
+        self.ouvert = ouvert
 
     def compare_cards(self, card_higher, card_lower):
         if self.is_trump(card_higher) and not self.is_trump(card_lower):

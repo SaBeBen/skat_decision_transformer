@@ -22,10 +22,9 @@ print("Start game")
 state_machine.handle_action(StartGameAction())
 
 print("\nDealer=" + game.get_dealer().name)
-print("First_Seat=" + game.get_first_seat().name + " " + str(game.get_first_seat().cards))
-print("Second_Seat=" + game.get_second_seat().name + " " + str(game.get_second_seat().cards))
-print("Third_Seat=" + game.get_third_seat().name + " " + str(game.get_third_seat().cards))
-print("Skat=" + str(game.skat))
+print("First_Seat=" + game.get_first_seat().name)
+print("Second_Seat=" + game.get_second_seat().name)
+print("Third_Seat=" + game.get_third_seat().name)
 
 # call from carol
 print("\n" + player3.name + " bids 18")
