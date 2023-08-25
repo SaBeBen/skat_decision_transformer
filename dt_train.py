@@ -261,7 +261,7 @@ class TrainableDT(DecisionTransformerModel):
 
         # injected behaviour
         action_preds = action_preds[attention_mask > 0]
-        sm = nn.Softmax(dim=1)
+        sm = torch.nn.Softmax(dim=1)
         action_preds = sm(action_preds)
 
         if not return_dict:
@@ -294,7 +294,7 @@ class TrainableDT(DecisionTransformerModel):
         # cross_ent_fct = nn.CrossEntropyLoss()
 
         # if the softmax is already applied in original forward
-        nll_loss_fct = nn.NLLLoss()
+        nll_loss_fct = torch.nn.NLLLoss()
         cross_ent_loss = nll_loss_fct(torch.log(action_preds), torch.argmax(action_targets, dim=1))
 
         # cross_ent_loss = cross_ent_fct(action_preds, action_targets)
@@ -308,7 +308,7 @@ class TrainableDT(DecisionTransformerModel):
         # if softmax is already applied on preds
         action_pred_sm = action_preds
 
-        prob_each_act_correct = action_pred_sm * action_targets
+        prob_each_act_correct = torch.mul(action_pred_sm, action_targets)
 
         # exclude Skat putting for defenders and hand games
         # amount of actions - amount of actions that select a card
@@ -325,7 +325,7 @@ class TrainableDT(DecisionTransformerModel):
         action_mask = torch.zeros_like(action_targets)
         action_mask[torch.arange(action_targets.shape[0]), action_taken] = 1
 
-        wrong_action_taken = action_mask * ~action_targets.bool()
+        wrong_action_taken = torch.mul(action_mask, ~action_targets.bool())
 
         # absolute amount of wrong cards being chosen, statistically exclude defending games
         # (first two actions are always wrong)
@@ -341,7 +341,7 @@ class TrainableDT(DecisionTransformerModel):
         # actions could try to falsely select a 9th card
         # amount_past_tricks = kwargs["timesteps"][:, -1]
         timesteps = kwargs["timesteps"]
-        hand_card_length = 12 - timesteps.reshape(-1)[attention_mask.reshape(-1) > 0]
+        hand_card_length = torch.sub(12, timesteps.reshape(-1)[attention_mask.reshape(-1) > 0])
 
         actions_oob = torch.nonzero(torch.div(action_taken, hand_card_length, rounding_mode='trunc'))
         # predictions have to be passed as tensors
@@ -388,18 +388,18 @@ class DTTrainer(Trainer):
         if len(output.predictions[0].shape) != 0:
             output.metrics.update(
                 {"eval_loss: ": round(float(output.predictions[0][-1]), 4),
-                 "prob_correct_action": round(float(output.predictions[1][-1]), 4),
-                 "rate_wrong_action_taken": round(float(output.predictions[2][-1]), 4),
-                 "rate_oob_actions": round(float(output.predictions[3][-1]), 4)
+                 "eval_prob_correct_action": round(float(output.predictions[1][-1]), 4),
+                 "eval_rate_wrong_action_taken": round(float(output.predictions[2][-1]), 4),
+                 "eval_rate_oob_actions": round(float(output.predictions[3][-1]), 4)
                  }
             )
         else:
             # edge case of one game
             output.metrics.update(
                 {"eval_loss: ": round(float(output.predictions[0]), 4),
-                 "prob_correct_action": round(float(output.predictions[1]), 4),
-                 "rate_wrong_action_taken": round(float(output.predictions[2]), 4),
-                 "rate_oob_actions": round(float(output.predictions[3]), 4)
+                 "eval_prob_correct_action": round(float(output.predictions[1]), 4),
+                 "eval_rate_wrong_action_taken": round(float(output.predictions[2]), 4),
+                 "eval_rate_oob_actions": round(float(output.predictions[3]), 4)
                  }
             )
 
@@ -428,10 +428,6 @@ class DTTrainer(Trainer):
         model.train()
         inputs = self._prepare_inputs(inputs)
 
-        # if is_sagemaker_mp_enabled():
-        #     loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
-        #     return loss_mb.reduce_mean().detach().to(self.args.device)
-
         with self.compute_loss_context_manager():
             loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
 
@@ -441,8 +437,8 @@ class DTTrainer(Trainer):
         if self.do_grad_scaling:
             self.scaler.scale(loss).backward()
         # elif self.use_apex:
-        #     with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-        #         scaled_loss.backward()
+        # with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+        #     scaled_loss.backward()
         else:
             self.accelerator.backward(loss)
 
@@ -504,6 +500,14 @@ class DTTrainer(Trainer):
 #
 #         return control
 
+# def compute_metrics(preds):
+#     preds = preds.predictions
+#     inputs = preds.inputs
+#
+#     return {"probability_of_correct_action": prob_correct_action,
+#             "rate_wrong_action_taken": rate_wrong_action_taken,
+#             "rate_oob_actions": rate_oob_actions}
+
 
 def run_training(args):
     # game specific arguments
@@ -523,9 +527,14 @@ def run_training(args):
     weight_decay = args['weight_decay']
     warmup_ratio = args['warmup_ratio']
     num_train_epochs = args['num_epochs']
-    device = args['device']
-    device = torch.device(device)
+    logging_steps = args['logging_steps']
+    use_cuda = args['use_cuda']
     save_model = args['save_model']
+
+    if torch.cuda.is_available() and use_cuda:
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
 
     if games_to_load.stop == -1:
         dataset = load_dataset("./datasets/wc_without_surr_and_passed")
@@ -543,7 +552,7 @@ def run_training(args):
         dataset = DatasetDict({"train": Dataset.from_dict(data_train),
                                "test": Dataset.from_dict(data_test)})
 
-    # device = torch.device("cuda")  # "cpu"
+    dataset = dataset.with_format("torch")
 
     collator = DecisionTransformerSkatDataCollator(dataset["train"], batch_size)
 
@@ -573,7 +582,7 @@ def run_training(args):
     # if torch.cuda.device_count() > 1:
     #     model = torch.nn.DataParallel(model)
 
-    # model.to(device)
+    model = model.to(device)
 
     training_args = TrainingArguments(
         report_to=["tensorboard"],
@@ -586,16 +595,14 @@ def run_training(args):
         warmup_ratio=warmup_ratio,
         optim="adamw_torch",
         max_grad_norm=0.1,
-        logging_steps=20,
+        logging_steps=logging_steps,
         logging_dir=rf"./training-logs/"
                     rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_"
                     rf"{games_to_load.stop}-{games_to_load.start}-sampled",
-
+        bf16=True
         # do_eval=True,
         # evaluation_strategy="steps",
         # eval_steps=100,
-
-        # no_cuda=True,
     )
 
     # tensorboard_callback = CustomTBCallback()
@@ -795,10 +802,11 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_ratio', type=float, default=0.1)
     parser.add_argument('--num_epochs', type=int, default=240)
-    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--use_cuda', type=bool, default=True)
     parser.add_argument('--save_model', type=bool, default=False,
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
+    parser.add_argument('--logging_steps', type=int, default=20)
 
     args = parser.parse_args()
 
