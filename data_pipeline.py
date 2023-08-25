@@ -3,13 +3,12 @@ from math import floor
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
-from datasets import DatasetDict, Dataset
 from tqdm import tqdm
 
 from card_representation_conversion import convert_one_hot_to_card, convert_one_hot_to_vector, convert_card_to_vector
-from environment import Env, get_trump_enc
+from environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards
+from exceptions import InvalidPlayerMove
 
 from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
 from game.state.game_state_bid import DeclareGameVariantAction, PutDownSkatAction, BidCallAction, BidPassAction, \
@@ -35,7 +34,7 @@ state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_
 possible_championships = ["wc", "gc", "gtc", "bl", "rc"]
 
 
-def get_game(game="wc", games_indices=(0, -1)):
+def get_game(game="wc", games_indices=slice(0, -1)):
     if game not in possible_championships:
         raise ValueError(f"The championship {game} does not exist in the database.")
 
@@ -132,24 +131,6 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
     return game_state, actions, rewards
 
 
-def initialise_hand_cards(game, current_player, current_player2, current_player3, i):
-    # ...instead, initialise the hand cards
-    current_player.set_cards(
-        [convert_one_hot_to_card(card) for card in
-         game[4 + 10 * current_player.get_id():14 + 10 * current_player.get_id()].tolist()])
-    current_player2.set_cards(
-        [convert_one_hot_to_card(card) for card in
-         game[4 + 10 * current_player2.get_id():14 + 10 * current_player2.get_id()].tolist()])
-    current_player3.set_cards(
-        [convert_one_hot_to_card(card) for card in
-         game[4 + 10 * current_player3.get_id():14 + 10 * current_player3.get_id()].tolist()])
-
-    # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
-    current_player.cards.sort()
-    current_player2.cards.sort()
-    current_player3.cards.sort()
-
-
 def declare_game_variant(env, trump):
     # declare the game variant, TODO: implement null rewards
     if trump == 0 or trump == 35 or trump == 46 or trump == 59:
@@ -165,38 +146,15 @@ def declare_game_variant(env, trump):
         env.state_machine.handle_action(DeclareGameVariantAction(env.game.get_declarer(), GameVariantSuit(suit)))
 
 
-def get_hand_cards(current_player):
-    # convert each card to the desired encoding
+def get_states_actions_rewards(
+        championship="wc",
+        games_indices=slice(0, 1000),
+        point_rewards=False,
+        game_index=-1,
+        perspective=(0, 1, 2)
+        ):
 
-    # compressed one-hot
-    # hand_cards = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    #               0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    #               0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    #               0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
-    # in for loop, without if:
-    # hand_cards[(card.suit.value * 12) + 3 + card.face.value] = 1
-    # skip other colours, skip enc of own colour + skip other values
-
-    hand_cards = []
-    last_card = None
-    for card in current_player.cards:
-        if last_card is not None and card.suit == last_card.suit:
-            hand_cards += [card.face.value]
-        else:
-            hand_cards += convert_card_to_vector(card)
-        # hand_cards += convert_card_to_vector(card)
-        last_card = card
-    hand_cards += [0] * (max_hand_len - len(hand_cards))
-
-    return hand_cards
-
-
-def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), point_rewards=False, game_index=-1):
-    # TODO: use amount of games for get_game
     meta_and_cards, skat_and_cs = get_game(game=championship, games_indices=games_indices)
-
-    # meta_and_cards = meta_and_cards[71298:71299]
-    # skat_and_cs = skat_and_cs[71298:71299]
 
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
@@ -204,19 +162,13 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
     # -> hand_cards
     fs_one_game = None
 
-    # if games_indices.stop == -1:
     amount_games = len(meta_and_cards)
-    # else:
-    #     amount_games = games_indices.stop - games_indices.start
 
     game_state_table = [[] * state_dim * 10] * amount_games * 3
 
     actions_table = [[] * act_dim * 10] * amount_games * 3
 
     rewards_table = [[] * 10] * amount_games * 3
-
-    # # episode length for padding
-    # max_len = 12
 
     # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0
@@ -225,9 +177,9 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
 
     card_error_games = []
 
-    for game in tqdm(meta_and_cards):  # meta_and_cards[games_indices]:
+    for game in tqdm(meta_and_cards):
 
-        for i in range(3):
+        for i in perspective:
 
             if skip:
                 skip = False
@@ -285,7 +237,7 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
             agent_player = game[i + 1]
 
             # map the cards to the hands of the players
-            initialise_hand_cards(game, current_player, current_player2, current_player3, i)
+            initialise_hand_cards(game, current_player, current_player2, current_player3)
 
             # pos_p[i] = 0
 
@@ -377,7 +329,7 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
                     try:
                         # put down first Skat card in the environment
                         env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down[0]))
-                    except:
+                    except ValueError or InvalidPlayerMove:
                         skip = True
                         break
 
@@ -402,7 +354,7 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
                     try:
                         # put down second Skat card in the environment
                         env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down[1]))
-                    except:
+                    except ValueError or InvalidPlayerMove:
                         skip = True
                         break
 
@@ -430,7 +382,7 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
                     try:
                         # put Skat down in the environment
                         env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down))
-                    except:
+                    except ValueError or InvalidPlayerMove:
                         skip = True
                         break
             else:
@@ -497,7 +449,7 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
                         env.state_machine.handle_action(
                             PlayCardAction(player=env.game.trick.leader,
                                            card=convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick - 1])))
-                    except:
+                    except ValueError or InvalidPlayerMove:
                         skip = True
                         break
 
@@ -525,7 +477,7 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
                         env.state_machine.handle_action(
                             PlayCardAction(player=env.game.trick.get_current_player(),
                                            card=convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick])))
-                    except:
+                    except ValueError or InvalidPlayerMove:
                         skip = True
                         break
 
@@ -552,7 +504,7 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
                         env.state_machine.handle_action(
                             PlayCardAction(player=env.game.trick.get_current_player(),
                                            card=convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick + 1])))
-                    except:
+                    except ValueError or InvalidPlayerMove:
                         skip = True
                         break
 
@@ -619,14 +571,14 @@ def get_states_actions_rewards(championship="wc", games_indices=slice(0, 1000), 
 
 
 # if __name__ == '__main__':
-#     for championship in possible_championships:
-#         point_rewards = True
-#         print(f"Reading in championship {championship}")
-#         data, _ = get_states_actions_rewards(championship,
-#                                              games_indices=slice(0, -1),
-#                                              point_rewards=point_rewards)
-#         data_frame = pd.DataFrame(data)
-#         data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
-#         dataset = DatasetDict({"train": Dataset.from_dict(data_train),
-#                                "test": Dataset.from_dict(data_test)})
-#         dataset.save_to_disk(f"./datasets/{championship}_without_surr_and_passed-pr_{point_rewards}")
+    # for championship in possible_championships:
+    #     point_rewards = True
+    #     print(f"Reading in championship {championship}")
+    #     data, _ = get_states_actions_rewards(championship,
+    #                                          games_indices=slice(0, -1),
+    #                                          point_rewards=point_rewards)
+    #     data_frame = pd.DataFrame(data)
+    #     data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
+    #     dataset = DatasetDict({"train": Dataset.from_dict(data_train),
+    #                            "test": Dataset.from_dict(data_test)})
+    #     dataset.save_to_disk(f"./datasets/{championship}_without_surr_and_passed-pr_{point_rewards}")

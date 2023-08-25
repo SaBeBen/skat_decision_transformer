@@ -23,7 +23,6 @@ from transformers.trainer_utils import speed_metrics, IntervalStrategy
 import data_pipeline
 import environment
 
-
 # %%
 # def set_memory_limit(limit_gb):
 #     limit_bytes = limit_gb * 1024 * 1024 * 1024  # Convert MB to bytes
@@ -31,31 +30,6 @@ import environment
 #
 #
 # set_memory_limit(16)
-
-# gameID 4: index 5
-game_index = 5
-
-games_to_load = slice(0, 10)
-
-# indices of games to train on
-# games_train_ind = (0, 700)
-
-print("Loading data...")
-data, _ = data_pipeline.get_states_actions_rewards(games_indices=games_to_load,
-                                                   point_rewards=False,
-                                                   game_index=game_index)
-
-data_frame = pd.DataFrame(data)
-
-data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)  # 42
-
-# %%
-dataset = DatasetDict({"train": Dataset.from_dict(data_train),
-                       "test": Dataset.from_dict(data_test)})
-
-# dataset = load_dataset("./datasets/wc_without_surr_and_passed")
-
-# %%
 
 MAX_EPISODE_LENGTH = 12
 
@@ -69,10 +43,14 @@ max_hand_len = 16 + act_dim  # 12 * card_dim
 # + open cards (2 * card_dim) + hand cards (12 * card_dim)
 state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
 
-device = torch.device("cuda")  # "cpu"
+"""
+This Implementation is based on the Decision Transformer https://github.com/kzl/decision-transformer/tree/master.
+
+To achieve a speed up and more modularity, the Huggingface implementation of the Decision Transformer is adapted.
+See https://huggingface.co/blog/train-decision-transformers for more information.
+"""
 
 
-# adapted from https://huggingface.co/blog/train-decision-transformers
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"  # pytorch
@@ -87,11 +65,11 @@ class DecisionTransformerSkatDataCollator:
     n_traj: int = 0  # to store the number of trajectories in the dataset
     games_ind: tuple = (0, 0)
 
-    def __init__(self, dataset, games_ind=None) -> None:
+    def __init__(self, dataset, batch_size=32) -> None:
         self.act_dim = len(dataset[0]["actions"][0])
         self.state_dim = len(dataset[0]["states"][0])
         self.dataset = dataset
-        self.games_ind = games_ind
+        self.batch_size = batch_size
         # calculate dataset stats for normalization of states
         states = []
         traj_lens = []
@@ -106,11 +84,19 @@ class DecisionTransformerSkatDataCollator:
         self.p_sample = traj_lens / sum(traj_lens)
 
     def get_batch_ind(self):
-        # picks game indices
-        # this picks the same game over *times* times
-        # (WC GameID 4: Agent sits in rear hand as soloist)
-        times = 1
-        return np.tile(np.arange(self.games_ind[0], self.games_ind[1]), times)
+        # batch_size = len(features)
+        # the batch size is per_device_train_batch_size*num_of_gpu, and the collator
+        # makes batches of batch_size every dataset_size//batch_size times,
+        # with the batch size being dataset_size%batch_size at the last call, just for the remaining data
+
+        # this is a bit of a hack to be able to sample of a non-uniform distribution
+        # we have a random pick of the data as a batch without controlling the shape,
+        return np.random.choice(
+            np.arange(self.n_traj),
+            size=self.batch_size,
+            replace=True,
+            p=self.p_sample,  # reweights, so we sample according to timesteps
+        )
 
     def _discount_cumsum(self, x, gamma):
         # weighted rewards are in the data set (get_states_actions_rewards)
@@ -122,22 +108,7 @@ class DecisionTransformerSkatDataCollator:
         return discount_cumsum
 
     def __call__(self, features):
-        batch_size = 32  # len(features)
-
-        # batch_inds = self.get_batch_ind()  # self.state_dim * self.max_ep_len
-
-        # this is a bit of a hack to be able to sample of a non-uniform distribution
-        # we have a random pick of the data as a batch without controlling the shape,
-        batch_inds = np.random.choice(
-            np.arange(self.n_traj),
-            size=batch_size,
-            replace=True,
-            p=self.p_sample,  # reweights, so we sample according to timesteps
-        )
-
-        # the batch size is per_device_train_batch_size*num_of_gpu, and the collator
-        # makes batches of batch_size every dataset_size//batch_size times,
-        # with the batch size being dataset_size%batch_size at the last call, just for the remaining data
+        batch_inds = self.get_batch_ind()
 
         # a batch of dataset features
         s, a, r, rtg, timesteps, mask, big_action_mask = [], [], [], [], [], [], []
@@ -150,10 +121,9 @@ class DecisionTransformerSkatDataCollator:
             # why do we need a randint?
             # to be able to jump into one game -> predict from every position and improve training
             #  jumping randomly into a surrendered game could not work well
-            si = random.randint(1, len(feature["rewards"]))  # 0
+            si = random.randint(1, len(feature["rewards"]))
 
-            # Done:
-            #  - fixed frame of 12 timesteps
+            #  fixed frame of 12 timesteps
             #  we want to have a history starting from the beginning of the game
             #  and include the rtgs from the last reward
             #  we had an implementation starting from the last timestep looking back
@@ -172,8 +142,8 @@ class DecisionTransformerSkatDataCollator:
             timesteps.append(np.arange(0, s[-1].shape[1]).reshape(1, -1))
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
-                self._discount_cumsum(np.array(feature["rewards"]), gamma=1)[: s[-1].shape[1]
-                ].reshape(1, -1, 1)  # TODO check the +1 removed here
+                self._discount_cumsum(np.array(feature["rewards"]), gamma=1)[: s[-1].shape[1]].reshape(1, -1, 1)
+                # TODO check the +1 removed here
             )
             if rtg[-1].shape[1] < s[-1].shape[1]:
                 print("if true")
@@ -199,7 +169,6 @@ class DecisionTransformerSkatDataCollator:
         s = torch.from_numpy(np.concatenate(s, axis=0)).float()
         a = torch.from_numpy(np.concatenate(a, axis=0)).float()
         r = torch.from_numpy(np.concatenate(r, axis=0)).float()
-        # d = torch.from_numpy(np.concatenate(d, axis=0))
         rtg = torch.from_numpy(np.concatenate(rtg, axis=0)).float()
         timesteps = torch.from_numpy(np.concatenate(timesteps, axis=0)).long()
         mask = torch.from_numpy(np.concatenate(mask, axis=0)).float()
@@ -229,7 +198,6 @@ class TrainableDT(DecisionTransformerModel):
             output_hidden_states=None,
             output_attentions=None,
             return_dict=None,
-            # action_mask=None
     ) -> Union[Tuple, DecisionTransformerOutput]:
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -241,7 +209,7 @@ class TrainableDT(DecisionTransformerModel):
         batch_size, seq_length = states.shape[0], states.shape[1]
 
         if attention_mask is None:
-            # attention mask for GPT: 1 if can be attended to, 0 if not
+            # attention mask for GPT: 1 if it can be attended to, 0 if not
             attention_mask = torch.ones((batch_size, seq_length), dtype=torch.long)
 
         # embed each modality with a different head
@@ -291,12 +259,13 @@ class TrainableDT(DecisionTransformerModel):
         state_preds = self.predict_state(x[:, 2])  # predict next state given state and action
         action_preds = self.predict_action(x[:, 1])  # predict next action given state
 
+        # injected behaviour
         action_preds = action_preds[attention_mask > 0]
         sm = nn.Softmax(dim=1)
         action_preds = sm(action_preds)
 
         if not return_dict:
-            return (state_preds, action_preds, return_preds)
+            return state_preds, action_preds, return_preds
 
         return DecisionTransformerOutput(
             last_hidden_state=encoder_outputs.last_hidden_state,
@@ -308,12 +277,12 @@ class TrainableDT(DecisionTransformerModel):
         )
 
     def forward(self, **kwargs):
-        output = self.originalForward(**kwargs)  # self.originalForward(**kwargs)  # super().forward(**kwargs)
+        output = self.originalForward(**kwargs)  # super().forward(**kwargs)
         # add the DT loss
         action_preds = output[1]
         action_targets = kwargs["actions"]
         attention_mask = kwargs["attention_mask"]
-        act_dim = action_preds.shape[1]  # 2
+        # act_dim = action_preds.shape[1]  # 2
 
         # exclude actions that are not attended to
         action_preds = action_preds.reshape(-1, act_dim)  # [attention_mask.reshape(-1) > 0]
@@ -322,7 +291,7 @@ class TrainableDT(DecisionTransformerModel):
         # TODO: rather output softmax predictions and maybe have a sm layer (careful with attn mask)
         #  or calculate everything after prediction (closer to original implementation)
         # cross entropy loss
-        cross_ent_fct = nn.CrossEntropyLoss()
+        # cross_ent_fct = nn.CrossEntropyLoss()
 
         # if the softmax is already applied in original forward
         nll_loss_fct = nn.NLLLoss()
@@ -332,43 +301,38 @@ class TrainableDT(DecisionTransformerModel):
 
         loss = cross_ent_loss
 
-        prob_correct_action, rate_wrong_action_taken = -1, -1
+        # only predicts the prob in context of 12 cards
+        # soft_max = nn.Softmax(dim=1)
+        # action_pred_sm = soft_max(action_preds)
 
-        # calculate advanced metrics only during evaluation to increase training speed
-        if True:  # not self.training:
-            # only predicts the prob in context of 12 cards
-            # soft_max = nn.Softmax(dim=1)
-            # action_pred_sm = soft_max(action_preds)
+        # if softmax is already applied on preds
+        action_pred_sm = action_preds
 
-            # if softmax is already applied on preds
-            action_pred_sm = action_preds
+        prob_each_act_correct = action_pred_sm * action_targets
 
-            prob_each_act_correct = action_pred_sm * action_targets
+        # exclude Skat putting for defenders and hand games
+        # amount of actions - amount of actions that select a card
+        amount_no_skat_action = action_targets.shape[0] - torch.sum(action_targets)
 
-            # exclude Skat putting for defenders and hand games
-            # amount of actions - amount of actions that select a card
-            amount_no_skat_action = action_targets.shape[0] - torch.sum(action_targets)
+        # the accumulated probability of the correct action / total number of actions taken in targets
+        prob_correct_action = torch.sum(prob_each_act_correct) / (
+                action_targets.shape[0] - amount_no_skat_action)
 
-            # the accumulated probability of the correct action / total number of actions taken in targets
-            prob_correct_action = torch.sum(prob_each_act_correct) / (
-                    action_targets.shape[0] - amount_no_skat_action)
+        # we want to know to what probability the model actually chooses an action != target_action,
+        # not the accumulated prob of (actions != target_action)
+        action_taken = torch.argmax(action_pred_sm, dim=1)
 
-            # we want to know to what probability the model actually chooses an action != target_action,
-            # not the accumulated prob of (actions != target_action)
+        action_mask = torch.zeros_like(action_targets)
+        action_mask[torch.arange(action_targets.shape[0]), action_taken] = 1
 
-            action_taken = torch.argmax(action_pred_sm, dim=1)
+        wrong_action_taken = action_mask * ~action_targets.bool()
 
-            action_mask = torch.zeros_like(action_targets)
-            action_mask[torch.arange(action_targets.shape[0]), action_taken] = 1
+        # absolute amount of wrong cards being chosen, statistically exclude defending games
+        # (first two actions are always wrong)
+        amount_wrong_actions_taken = torch.sum(wrong_action_taken) - amount_no_skat_action
 
-            wrong_action_taken = action_mask * ~action_targets.bool()
-
-            # absolute amount of wrong cards being chosen, statistically exclude defending games
-            # (first two actions are always wrong)
-            amount_wrong_actions_taken = torch.sum(wrong_action_taken) - amount_no_skat_action
-
-            # rate of wrong cards being chosen
-            rate_wrong_action_taken = amount_wrong_actions_taken / action_targets.shape[0]
+        # rate of wrong cards being chosen
+        rate_wrong_action_taken = amount_wrong_actions_taken / action_targets.shape[0]
 
         # calculate subset of illegal actions:
         # actions selecting out of hand cards.
@@ -391,9 +355,6 @@ class TrainableDT(DecisionTransformerModel):
                 "rate_wrong_action_taken": rate_wrong_action_taken,
                 "rate_oob_actions": rate_oob_actions
                 }
-
-    # def original_forward(self, **kwargs):
-    #     return super().forward(**kwargs)
 
 
 class DTTrainer(Trainer):
@@ -429,7 +390,7 @@ class DTTrainer(Trainer):
                 {"eval_loss: ": round(float(output.predictions[0][-1]), 4),
                  "prob_correct_action": round(float(output.predictions[1][-1]), 4),
                  "rate_wrong_action_taken": round(float(output.predictions[2][-1]), 4),
-                 "rate_oob_actions": round(float(output.predictions[3]), 4)
+                 "rate_oob_actions": round(float(output.predictions[3][-1]), 4)
                  }
             )
         else:
@@ -494,7 +455,8 @@ class DTTrainer(Trainer):
         # this is a workaround to log own metrics during training
         if self.state.global_step == 1 and self.args.logging_first_step:
             self.control.should_log = True
-        if self.args.logging_strategy == IntervalStrategy.STEPS and self.state.global_step % self.args.logging_steps == 0:
+        if self.args.logging_strategy == IntervalStrategy.STEPS and \
+                self.state.global_step % self.args.logging_steps == 0:
             self.control.should_log = True
 
         if self.control.should_log:
@@ -543,261 +505,264 @@ class DTTrainer(Trainer):
 #         return control
 
 
-collator = DecisionTransformerSkatDataCollator(dataset["train"])
+def run_training(args):
+    # game specific arguments
+    championship = args['championship']
+    # data_format = args['data_format']
+    point_rewards = args['point_rewards']
+    games_to_load = slice(args['games'][0], args['games'][1])
+    perspective = args['perspective']
 
-config = DecisionTransformerConfig(
-    state_dim=state_dim,
-    act_dim=act_dim,
-    action_tanh=False,  # do not apply the tanh fct on the output action
-    activation_function="tanh",
-    # n_head=2,
-    n_layer=2,
-    max_ep_len=MAX_EPISODE_LENGTH,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
-    # vocab_size=1200,  # there are 32 cards + pos_tp + score +  + trump_enc
-    n_positions=1024,
-    scale_attn_weights=True,
-    embd_pdrop=0.1,
-    resid_pdrop=0.1,
-    max_length=MAX_EPISODE_LENGTH,
-)
+    # train specific arguments
+    batch_size = args['batch_size']
+    n_layer = args['n_layer']
+    n_head = args['n_head']
+    act_fct = args['activation_function']
+    dropout = args['dropout']
+    l_rate = args['learning_rate']
+    weight_decay = args['weight_decay']
+    warmup_ratio = args['warmup_ratio']
+    num_train_epochs = args['num_epochs']
+    device = args['device']
+    device = torch.device(device)
+    save_model = args['save_model']
 
+    if games_to_load.stop == -1:
+        dataset = load_dataset("./datasets/wc_without_surr_and_passed")
+    else:
+        print("Loading data...")
+        game_index = 5
+        data, _ = data_pipeline.get_states_actions_rewards(championship=championship,
+                                                           games_indices=games_to_load,
+                                                           point_rewards=point_rewards,
+                                                           game_index=game_index,
+                                                           perspective=perspective)
 
-# pretrained_model = TrainableDT.from_pretrained("./pretrained_models/Tue_Aug_22_22-42-38_2023-games_1000-0-sampled")
-# model = pretrained_model
+        data_frame = pd.DataFrame(data)
+        data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)  # 42
+        dataset = DatasetDict({"train": Dataset.from_dict(data_train),
+                               "test": Dataset.from_dict(data_test)})
 
-model = TrainableDT(config)
+    # device = torch.device("cuda")  # "cpu"
 
-# if torch.cuda.device_count() > 1:
-#     model = torch.nn.DataParallel(model)
+    collator = DecisionTransformerSkatDataCollator(dataset["train"], batch_size)
 
-# model.to(device)
+    config = DecisionTransformerConfig(
+        state_dim=state_dim,
+        act_dim=act_dim,
+        action_tanh=False,  # do not apply the tanh fct on the output action
+        activation_function=act_fct,
+        n_head=n_head,
+        n_layer=n_layer,
+        max_ep_len=MAX_EPISODE_LENGTH,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
+        # vocab_size=1200,  # there are 32 cards + pos_tp + score +  + trump_enc
+        n_positions=1024,
+        scale_attn_weights=True,
+        # embd_pdrop=dropout,
+        resid_pdrop=dropout,
+        attn_pdrop=dropout,
+        max_length=MAX_EPISODE_LENGTH,
+    )
 
-training_args = TrainingArguments(
-    report_to=["tensorboard"],
-    output_dir="training_output/",
-    remove_unused_columns=False,
-    num_train_epochs=240,
-    # per_device_train_batch_size=32,
-    learning_rate=1e-3,
-    weight_decay=1e-4,
-    warmup_ratio=0.1,
-    optim="adamw_torch",
-    max_grad_norm=0.1,
-    logging_steps=20,
-    logging_dir=rf"./training-logs/"
-                rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_"
-                rf"{games_to_load.stop}-{games_to_load.start}-sampled",
+    # pretrained_model = TrainableDT.from_pretrained(
+    #     "./pretrained_models/Tue_Aug_22_22-42-38_2023-games_1000-0-sampled")
+    # model = pretrained_model
 
-    # do_eval=True,
-    # evaluation_strategy="steps",
-    # eval_steps=100,
+    model = TrainableDT(config)
 
-    # no_cuda=True,
-)
+    # if torch.cuda.device_count() > 1:
+    #     model = torch.nn.DataParallel(model)
 
-# tensorboard_callback = CustomTBCallback()
+    # model.to(device)
 
-trainer = DTTrainer(  # CustomDTTrainer
-    model=model,
-    args=training_args,
-    train_dataset=dataset["train"],
-    eval_dataset=dataset["test"],
-    data_collator=collator,
-    # compute_metrics=compute_metrics,  # is not reachable without labels
-    # callbacks=[tensorboard_callback]  # here or in "report_to" of args
-)
+    training_args = TrainingArguments(
+        report_to=["tensorboard"],
+        output_dir="training_output/",
+        remove_unused_columns=False,
+        num_train_epochs=num_train_epochs,
+        per_device_train_batch_size=32,
+        learning_rate=l_rate,
+        weight_decay=weight_decay,
+        warmup_ratio=warmup_ratio,
+        optim="adamw_torch",
+        max_grad_norm=0.1,
+        logging_steps=20,
+        logging_dir=rf"./training-logs/"
+                    rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_"
+                    rf"{games_to_load.stop}-{games_to_load.start}-sampled",
 
-print("Training...")
-trainer.train()
+        # do_eval=True,
+        # evaluation_strategy="steps",
+        # eval_steps=100,
 
-# for tensorboard visualization:
-# 1. rm -r ./training-logs/*
-# 2. run training
-# 3. tensorboard --logdir=./training-logs
+        # no_cuda=True,
+    )
 
-# for saving the model:
-# model.save_pretrained(
-#     rf"./pretrained_models/"
-#     rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_{games_to_load.stop}-{games_to_load.start}-sampled")
-# and loading it again
-# pretrained_model = TrainableDT.from_pretrained("./pretrained_models")
-# trainer.model = pretrained_model
+    # tensorboard_callback = CustomTBCallback()
 
-# collator.games_ind = (game_index + 1, game_index + 2)
+    trainer = DTTrainer(  # CustomDTTrainer
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
+        data_collator=collator,
+        # compute_metrics=compute_metrics,  # is not reachable without labels
+        # callbacks=[tensorboard_callback]  # here or in "report_to" of args
+    )
 
-training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
+    print("Training...")
+    trainer.train()
 
-trainer.data_collator = DecisionTransformerSkatDataCollator(dataset["test"])
+    # for tensorboard visualization:
+    # 1. rm -r ./training-logs/*
+    # 2. run training
+    # 3. tensorboard --logdir=./training-logs
 
-evaluation_results = trainer.evaluate()
+    # for saving the model:
+    # model.save_pretrained(
+    #     rf"./pretrained_models/"
+    #     rf"{time.asctime().replace(':', '-').replace(' ', '_')}-"
+    #     rf"games_{games_to_load.start}-{games_to_load.stop}-sampled")
+    # and loading it again
+    # pretrained_model = TrainableDT.from_pretrained("./pretrained_models")
+    # trainer.model = pretrained_model
 
-print(evaluation_results)
+    if save_model:
+        model.save_pretrained(
+            rf"./pretrained_models/"
+            rf"{time.asctime().replace(':', '-').replace(' ', '_')}-"
+            rf"games_{games_to_load.start}-{games_to_load.stop}-"
+            rf"point_rewards_{point_rewards}")
 
-# training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = False, None, None
+    training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
 
+    trainer.data_collator = DecisionTransformerSkatDataCollator(dataset["test"])
 
-# # %%
-#
-# # select available cudas for faster matrix computation
-# # device = torch.device("cuda")
-#
-# model = model.to("cpu")
-#
-# # trainer.evaluate(dataset["train"])
-#
-# model.eval()
-#
-#
-# # env = environment.Env()
-#
+    evaluation_results = trainer.evaluate()
+
+    print(evaluation_results)
+
 
 # ------------------------------------------------------------------------------------
 #                           Interactive Implementation
-#
-# # Function that gets an action from the model using autoregressive prediction
-# # with a window of the previous 20 timesteps. We only need a maximum of 12 timesteps
-# def get_action(model, states, actions, rewards, returns_to_go, timesteps):
-#     # This implementation does not condition on past rewards
-#
-#     states = states.reshape(1, -1, model.config.state_dim)
-#     actions = actions.reshape(1, -1, model.config.act_dim)
-#     returns_to_go = returns_to_go.reshape(1, -1, 1)
-#     timesteps = timesteps.reshape(1, -1)
-#
-#     # The prediction is conditioned on up to 20 previous time-steps
-#     states = states[:, -model.config.max_length:]
-#     actions = actions[:, -model.config.max_length:]
-#     returns_to_go = returns_to_go[:, -model.config.max_length:]
-#     timesteps = timesteps[:, -model.config.max_length:]
-#
-#     # pad all tokens to sequence length, this is required if we process batches
-#     padding = model.config.max_length - states.shape[1]
-#     attention_mask = torch.cat([torch.zeros(padding), torch.ones(states.shape[1])])
-#     attention_mask = attention_mask.to(dtype=torch.long).reshape(1, -1)
-#     states = torch.cat([torch.zeros((1, padding, state_dim)), states], dim=1).float()
-#     actions = torch.cat([torch.zeros((1, padding, act_dim)), actions], dim=1).float()
-#     returns_to_go = torch.cat([torch.zeros((1, padding, 1)), returns_to_go], dim=1).float()
-#     timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
-#
-#     # perform the prediction
-#     state_preds, action_preds, return_preds = model.original_forward(
-#         states=states,
-#         actions=actions,
-#         rewards=rewards,
-#         returns_to_go=returns_to_go,
-#         timesteps=timesteps,
-#         attention_mask=attention_mask,
-#         return_dict=False, )
-#     return action_preds[0, -1]
 
-#
-# scale = 1
-#
-# # state_mean = np.array()
-# # state_std = np.array()
-# #
-# # state_mean = torch.from_numpy(state_mean)
-# # state_std = torch.from_numpy(state_std)
-#
-# state_mean = collator.state_mean.astype(np.float32)
-# state_std = collator.state_std.astype(np.float32)
-#
-# state_mean = torch.from_numpy(state_mean).to(device="cpu")
-# state_std = torch.from_numpy(state_std).to(device="cpu")
-#
-# # env = environment.Env() if one_game is None else one_game
-# env = environment.Env()
-#
-# TARGET_RETURN = 2 * 120  # 102
-#
-# for eval_game in range(1):  # dataset["test"]:
-#
-#     # TODO: scale up
-#     # we need the others
-#
-#     # build the environment for the evaluation
-#     state = env.reset(current_player_id=(game_index % 3), game_first_state=dataset["train"]["states"][game_index][0],
-#                       meta_and_cards_game=meta_and_cards[floor(game_index/3)])  # game_env=one_game
-#     # game_states=dataset['train'][8]['states'])
-#
-#     target_return = torch.tensor(TARGET_RETURN).float().reshape(1, 1)
-#     states = torch.from_numpy(state).reshape(1, state_dim).float()
-#     actions = torch.zeros((0, act_dim)).float()
-#     rewards = torch.zeros(0).float()
-#     timesteps = torch.tensor(0).reshape(1, 1).long()
-#     actions_pred_eval = torch.zeros((0, act_dim)).float()
-#
-#     # take steps in the environment (evaluation, not training)
-#     for t in range(MAX_EPISODE_LENGTH):
-#         # add zeros for actions as input for the current time-step
-#         actions = torch.cat([actions, torch.zeros((1, act_dim))], dim=0)
-#         actions_pred_eval = torch.cat([actions_pred_eval, torch.zeros((1, act_dim))], dim=0)
-#         rewards = torch.cat([rewards, torch.zeros(1)])
-#
-#         # predicting the action to take
-#         action_pred = get_action(model,
-#                                  states,
-#                                  actions,
-#                                  rewards,
-#                                  target_return,
-#                                  timesteps)
-#
-#         soft_max = nn.Softmax(dim=0)
-#         action_pred = soft_max(action_pred)
-#
-#         actions_pred_eval[-1] = action_pred
-#
-#         print(f"Action {t}: {action_pred}")
-#
-#         action = action_pred.detach().numpy()
-#
-#         # hand cards within the state are padded from right to left after each action
-#         # mask the action
-#         # action[-t:] = 0
-#
-#         valid_actions = action[:MAX_EPISODE_LENGTH - t]
-#
-#         # get the index of the card with the highest probability
-#         card_index = np.argmax(valid_actions)
-#
-#         # only select the best card
-#         action[:] = 0
-#         action[card_index] = 1
-#
-#         actions[-1] = Tensor(action)
-#
-#         # interact with the environment based on this action
-#         state, reward, done = env.step(tuple(action))
-#
-#         print(f"Reward {t}: {reward}")
-#
-#         cur_state = torch.from_numpy(state).reshape(1, state_dim)
-#         states = torch.cat([states, cur_state], dim=0)
-#         rewards[-1] = reward
-#
-#         pred_return = target_return[0, -1] - (reward / scale)
-#         target_return = torch.cat([target_return, pred_return.reshape(1, 1)], dim=1)
-#         timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
-#
-#         if done:
-#             # for evaluation of unspecific games
-#             diff_target_reached = TARGET_RETURN - sum(rewards)
-#
-#             print(f"Difference of target reward and reached reward: {diff_target_reached}")
-#
-#             # for direct evaluation on specific known games
-#             actions_pred = actions_pred_eval.detach().numpy()
-#
-#             actions_correct = dataset["train"]["actions"][game_index]
-#
-#             hand_len = 12 if any(actions_correct[0]) else 10
-#
-#             prob_each_act_correct = actions_pred * actions_correct
-#
-#             prob_correct_action = sum(sum(prob_each_act_correct)) / hand_len  # [12 - hand_len:]
-#
-#             print(f"Avg probability of correct action: {prob_correct_action}")
-#             break
+def interactive_env(model):
+    # Function that gets an action from the model using autoregressive prediction
+    # with a window of the previous 20 timesteps. We only need a maximum of 12 timesteps
+    def get_action(model, states, actions, rewards, returns_to_go, timesteps):
+        # This implementation does not condition on past rewards
+
+        states = states.reshape(1, -1, model.config.state_dim)
+        actions = actions.reshape(1, -1, model.config.act_dim)
+        returns_to_go = returns_to_go.reshape(1, -1, 1)
+        timesteps = timesteps.reshape(1, -1)
+
+        # The prediction is conditioned on up to 20 previous time-steps
+        states = states[:, -model.config.max_length:]
+        actions = actions[:, -model.config.max_length:]
+        returns_to_go = returns_to_go[:, -model.config.max_length:]
+        timesteps = timesteps[:, -model.config.max_length:]
+
+        # pad all tokens to sequence length, this is required if we process batches
+        padding = model.config.max_length - states.shape[1]
+        attention_mask = torch.cat([torch.zeros(padding), torch.ones(states.shape[1])])
+        attention_mask = attention_mask.to(dtype=torch.long).reshape(1, -1)
+        states = torch.cat([torch.zeros((1, padding, state_dim)), states], dim=1).float()
+        actions = torch.cat([torch.zeros((1, padding, act_dim)), actions], dim=1).float()
+        returns_to_go = torch.cat([torch.zeros((1, padding, 1)), returns_to_go], dim=1).float()
+        timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
+
+        # perform the prediction
+        state_preds, action_preds, return_preds = model.original_forward(
+            states=states,
+            actions=actions,
+            rewards=rewards,
+            returns_to_go=returns_to_go,
+            timesteps=timesteps,
+            attention_mask=attention_mask,
+            return_dict=False, )
+        return action_preds[0, -1]
+
+    scale = 1
+
+    # env = environment.Env() if one_game is None else one_game
+    env = environment.Env()
+
+    # TODO: change to max point reward, if point reward is activated
+    target_return = 2 * 120
+
+    for games in range(1):
+
+        for current_player in range(3):
+
+            # build the environment for the evaluation
+            state = env.reset(current_player_id=current_player)
+            # game_states=dataset['train'][8]['states'])
+
+            target_return = torch.tensor(target_return).float().reshape(1, 1)
+            states = torch.from_numpy(state).reshape(1, state_dim).float()
+            actions = torch.zeros((0, act_dim)).float()
+            rewards = torch.zeros(0).float()
+            timesteps = torch.tensor(0).reshape(1, 1).long()
+            actions_pred_eval = torch.zeros((0, act_dim)).float()
+
+            # take steps in the environment (evaluation, not training)
+            for t in range(MAX_EPISODE_LENGTH):
+                # add zeros for actions as input for the current time-step
+                actions = torch.cat([actions, torch.zeros((1, act_dim))], dim=0)
+                actions_pred_eval = torch.cat([actions_pred_eval, torch.zeros((1, act_dim))], dim=0)
+                rewards = torch.cat([rewards, torch.zeros(1)])
+
+                # predicting the action to take
+                action_pred = get_action(model,
+                                         states,
+                                         actions,
+                                         rewards,
+                                         target_return,
+                                         timesteps)
+
+                soft_max = nn.Softmax(dim=0)
+                action_pred = soft_max(action_pred)
+
+                actions_pred_eval[-1] = action_pred
+
+                print(f"Action {t}: {action_pred}")
+
+                action = action_pred.detach().numpy()
+
+                # hand cards within the state are padded from right to left after each action
+                # mask the action
+                valid_actions = action[:MAX_EPISODE_LENGTH - t]
+
+                # get the index of the card with the highest probability
+                card_index = np.argmax(valid_actions)
+
+                # only select the best card
+                action[:] = 0
+                action[card_index] = 1
+
+                actions[-1] = Tensor(action)
+
+                # interact with the environment based on this action
+                state, reward, done = env.step(tuple(action))
+
+                print(f"Reward {t}: {reward}")
+
+                cur_state = torch.from_numpy(state).reshape(1, state_dim)
+                states = torch.cat([states, cur_state], dim=0)
+                rewards[-1] = reward
+
+                pred_return = target_return[0, -1] - (reward / scale)
+                target_return = torch.cat([target_return, pred_return.reshape(1, 1)], dim=1)
+                timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
+
+                if done:
+                    # for evaluation of unspecific games
+                    diff_target_reached = target_return - sum(rewards)
+
+                    print(f"Difference of target reward and reached reward: {diff_target_reached}")
+                    break
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='Skat_Decision_Transformer_trainer',
@@ -813,8 +778,11 @@ if __name__ == '__main__':
     parser.add_argument('--championship', '-cs', type=str, default='wc', choices=['wc', 'gc', 'gtc', 'bl', 'rc'],
                         help='dataset of championship to select from')
     # parser.add_argument('--data_format', type=str, default='mixed', choices=['one-hot', 'mixed'])
-    parser.add_argument('--games', type=tuple, default=(0, 100),
-                        help='the games to load (loads from every player´s perspective)')
+    parser.add_argument('--games', type=tuple, default=(0, 1),
+                        help='the games to load')
+    parser.add_argument('--perspective', type=tuple, default=(0, 1, 2),
+                        help='get the game from the perspective of these players. ',
+                        choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), (1), (2), (3)])
     parser.add_argument('--point_rewards', type=bool, default=False,
                         help='whether to add points of the game to the card points as a reward')
     parser.add_argument('--batch_size', type=int, default=32)
@@ -825,9 +793,13 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-3)
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
-    parser.add_argument('--warmup_steps', type=int, default=10000)
-    # parser.add_argument('--num_eval_episodes', type=int, default=100)
-    # parser.add_argument('--num_steps_per_iter', type=int, default=10000)
+    parser.add_argument('--warmup_ratio', type=float, default=0.1)
+    parser.add_argument('--num_epochs', type=int, default=240)
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--save_model', type=bool, default=False,
+                        help='Whether to save the model. '
+                             'If true, the trained model will be saved to "pretrained_models"')
 
     args = parser.parse_args()
+
+    run_training(vars(args))

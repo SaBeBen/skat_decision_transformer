@@ -2,7 +2,7 @@ import numpy as np
 
 import exceptions
 from card_representation_conversion import convert_one_hot_to_card, convert_card_to_vector, \
-    convert_one_hot_to_vector, convert_tuple_to_card
+    convert_one_hot_to_vector
 
 from game.game import Game
 from game.game_state_machine import GameStateMachine
@@ -38,6 +38,50 @@ def get_trump_enc(trump, enc="cat"):
         return trump - 9
     else:
         return trump
+
+
+def get_hand_cards(current_player):
+    # convert each card to the desired encoding
+
+    # compressed one-hot
+    # hand_cards = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #               0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #               0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #               0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+    # in for loop, without if:
+    # hand_cards[(card.suit.value * 12) + 3 + card.face.value] = 1
+    # skip other colours, skip enc of own colour + skip other values
+
+    hand_cards = []
+    last_card = None
+    for card in current_player.cards:
+        if last_card is not None and card.suit == last_card.suit:
+            hand_cards += [card.face.value]
+        else:
+            hand_cards += convert_card_to_vector(card)
+        last_card = card
+        # hand_cards += convert_card_to_vector(card)
+    hand_cards += [0] * (max_hand_len - len(hand_cards))
+
+    return hand_cards
+
+
+def initialise_hand_cards(game, current_player, current_player2, current_player3):
+    # ...instead, initialise the hand cards
+    current_player.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + 10 * current_player.get_id():14 + 10 * current_player.get_id()].tolist()])
+    current_player2.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + 10 * current_player2.get_id():14 + 10 * current_player2.get_id()].tolist()])
+    current_player3.set_cards(
+        [convert_one_hot_to_card(card) for card in
+         game[4 + 10 * current_player3.get_id():14 + 10 * current_player3.get_id()].tolist()])
+
+    # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
+    current_player.cards.sort()
+    current_player2.cards.sort()
+    current_player3.cards.sort()
 
 
 # calculates the win probability solely based on the starting hand cards of a player
@@ -132,39 +176,6 @@ def calculate_kinback_scheme(hand_cards, pos):
     return kb_score, trump + 9
 
 
-def get_hand_cards(current_player):
-    hand_cards = []
-    last_card = None
-    for card in current_player.cards:
-        if last_card is not None and card.suit == last_card.suit:
-            hand_cards += [card.face.value]
-        else:
-            hand_cards += convert_card_to_vector(card)
-        last_card = card
-        # hand_cards += convert_card_to_vector(card)
-    hand_cards += [0] * (max_hand_len - len(hand_cards))
-
-    return hand_cards
-
-
-def initialise_hand_cards(game, current_player, current_player2, current_player3):
-    # ...instead, initialise the hand cards
-    current_player.set_cards(
-        [convert_one_hot_to_card(card) for card in
-         game[4 + 10 * current_player.get_id():14 + 10 * current_player.get_id()].tolist()])
-    current_player2.set_cards(
-        [convert_one_hot_to_card(card) for card in
-         game[4 + 10 * current_player2.get_id():14 + 10 * current_player2.get_id()].tolist()])
-    current_player3.set_cards(
-        [convert_one_hot_to_card(card) for card in
-         game[4 + 10 * current_player3.get_id():14 + 10 * current_player3.get_id()].tolist()])
-
-    # sort the cards to make hands reproducible, improve readability for attention mechanism (and humans)
-    current_player.cards.sort()
-    current_player2.cards.sort()
-    current_player3.cards.sort()
-
-
 class Env:
     def __init__(self):
         # self.device = torch.device("cuda")
@@ -198,8 +209,6 @@ class Env:
         return self.state
 
     def get_game_points(self):
-        game_points = 0
-
         if sum(self.trump_enc) == 0:
             game_points = self.game.game_variant.get_level()
         else:
@@ -506,12 +515,12 @@ class Env:
                 open_cards = [0] * card_dim + [0] * card_dim
             elif self.game.trick.get_next_player(self.current_player) == self.current_player:
                 # in position of the second player, there is one open card
-                open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * (self.trick) - 1]) + [0] * card_dim
+                open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick - 1]) + [0] * card_dim
             else:
                 # in position of the third player, there are two open cards
                 open_cards = convert_one_hot_to_vector(
-                    self.skat_and_cs[3 * (self.trick) - 1]) + convert_one_hot_to_vector(
-                    self.skat_and_cs[3 * (self.trick)])
+                    self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
+                    self.skat_and_cs[3 * self.trick])
         else:
             # # if Skat is put in reset
             # if self.trick == 1 and self.current_player is self.game.get_declarer():
@@ -562,12 +571,12 @@ class Env:
                 open_cards = [0] * card_dim + [0] * card_dim
             elif self.game.trick.get_next_player(self.current_player) == self.current_player:
                 # in position of the second player, there is one open card
-                open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * (self.trick) - 1]) + [0] * card_dim
+                open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick - 1]) + [0] * card_dim
             else:
                 # in position of the third player, there are two open cards
                 open_cards = convert_one_hot_to_vector(
-                    self.skat_and_cs[3 * (self.trick) - 1]) + convert_one_hot_to_vector(
-                    self.skat_and_cs[3 * (self.trick)])
+                    self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
+                    self.skat_and_cs[3 * self.trick])
 
         self.score[1] += self.game.get_last_trick_points() if self.current_player.current_trick_points == 0 else 0
         self.score[0] += self.current_player.current_trick_points
