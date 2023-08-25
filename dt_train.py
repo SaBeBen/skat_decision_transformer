@@ -778,9 +778,9 @@ if __name__ == '__main__':
     parser.add_argument('--championship', '-cs', type=str, default='wc', choices=['wc', 'gc', 'gtc', 'bl', 'rc'],
                         help='dataset of championship to select from')
     # parser.add_argument('--data_format', type=str, default='mixed', choices=['one-hot', 'mixed'])
-    parser.add_argument('--games', type=tuple, default=(0, 1),
+    parser.add_argument('--games', type=int, default=(0, 10), nargs="+",
                         help='the games to load')
-    parser.add_argument('--perspective', type=tuple, default=(0, 1, 2),
+    parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
                         help='get the game from the perspective of these players. ',
                         choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), (1), (2), (3)])
     parser.add_argument('--point_rewards', type=bool, default=False,
