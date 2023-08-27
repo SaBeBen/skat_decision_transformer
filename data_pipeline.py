@@ -164,11 +164,17 @@ def get_states_actions_rewards(
 
     amount_games = len(meta_and_cards)
 
-    game_state_table = [[] * state_dim * 10] * amount_games * 3
+    if not isinstance(perspective, tuple):
+        perspective = [perspective]
+        len_p = 1
+    else:
+        len_p = len(perspective)
 
-    actions_table = [[] * act_dim * 10] * amount_games * 3
+    game_state_table = [[] * state_dim * 10] * amount_games * len_p
 
-    rewards_table = [[] * 10] * amount_games * 3
+    actions_table = [[] * act_dim * 10] * amount_games * len_p
+
+    rewards_table = [[] * 10] * amount_games * len_p
 
     # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0

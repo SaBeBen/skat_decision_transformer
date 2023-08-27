@@ -29,15 +29,10 @@ state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_
 
 
 # convert the trump from as commonly represented in one number to a (categorical) vector
-def get_trump_enc(trump, enc="cat"):
-    if enc == "cat":
-        # if categorical encoding of suits is activated
-        return [1 if trump == 9 or trump == 24 else 0, 1 if trump == 10 or trump == 24 else 0,
-                1 if trump == 11 or trump == 24 else 0, 1 if trump == 12 or trump == 24 else 0]
-    elif 8 < trump < 13:
-        return trump - 9
-    else:
-        return trump
+def get_trump_enc(trump):
+    # if categorical encoding of suits is activated
+    return [1 if trump == 9 or trump == 24 else 0, 1 if trump == 10 or trump == 24 else 0,
+            1 if trump == 11 or trump == 24 else 0, 1 if trump == 12 or trump == 24 else 0]
 
 
 def get_hand_cards(current_player):
@@ -180,6 +175,7 @@ class Env:
     def __init__(self):
         # self.device = torch.device("cuda")
         # Name the players with placeholders to recognize them during evaluation and debugging
+
         self.player1 = Player(0, "Alice")
         self.player2 = Player(1, "Bob")
         self.player3 = Player(2, "Carol")
@@ -200,6 +196,7 @@ class Env:
         self.score = [0, 0]
 
         self.current_player = None
+        self.open_cards = None
         self.last_trick = None
         self.skat_put = [False, False]
         self.trick = 1
@@ -209,6 +206,7 @@ class Env:
         return self.state
 
     def get_game_points(self):
+        # TODO: tournament count
         if sum(self.trump_enc) == 0:
             game_points = self.game.game_variant.get_level()
         else:
@@ -227,68 +225,20 @@ class Env:
         return game_points
 
     def reset(self, current_player_id, game_first_state=None, meta_and_cards_game=None):
-        # self.game.dealer += 1
-
         self.game.reset()
 
-        # DONE: Problem: How do we initialise the seating and bidding?
-        if game_first_state is None:
-            self.state_machine = GameStateMachine(GameStateStart(self.game))
-            # shuffles and gives out cards
-            self.state_machine.handle_action(StartGameAction())
+        initialise_hand_cards(meta_and_cards_game,
+                              self.current_player,
+                              self.game.players[current_player_id + 1 % 3],
+                              self.game.players[current_player_id + 2 % 3])
 
-            self.current_player = self.game.players[current_player_id]
+        self.pos_p = game_first_state[:3]
 
-            highest_score, soloist_pos, i = 0, 0, 0
+        self.trump_enc = game_first_state[3:6]
 
-            soloist = None
-            trump = -1
-            for player in self.game.players:
-                i += 1
-                # lets the player with the best scoring cards play
-                kb_score, trump_player = calculate_kinback_scheme(player.cards, i)
-                if kb_score > highest_score:
-                    highest_score = kb_score
-                    soloist = player
-                    trump = trump_player
+        self.current_player = self.game.players[current_player_id]
 
-            self.state_machine.handle_action(BidCallAction(soloist, 18))
-            self.state_machine.handle_action(
-                BidPassAction(self.game.players[(soloist.get_id()) % 3], 18))  # id starts at 1
-            self.state_machine.handle_action(BidPassAction(self.game.players[(soloist.get_id() + 1) % 3], 18))
-
-            self.state_machine.handle_action(PickUpSkatAction(soloist))
-
-            self.current_player.cards.sort()
-
-            self.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(trump)))
-            self.trump_enc = get_trump_enc(trump)
-
-            # determine the position of players
-            pos_p = [0, 0, 0]
-
-            if self.game.get_declarer().get_id() == current_player_id:
-                # initialise positions of defender as -1
-                pos_p[(current_player_id + 1) % 3], pos_p[(current_player_id + 2) % 3] = -1, -1
-            elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
-                pos_p[(current_player_id + 1) % 3] = -1
-                pos_p[(current_player_id + 2) % 3] = 1
-            else:
-                pos_p[(current_player_id + 1) % 3] = 1
-                pos_p[(current_player_id + 2) % 3] = -1
-
-            self.pos_p = pos_p
-        else:
-            initialise_hand_cards(meta_and_cards_game,
-                                  self.current_player,
-                                  self.game.players[current_player_id + 1 % 3],
-                                  self.game.players[current_player_id + 2 % 3])
-
-            self.pos_p = game_first_state[:3]
-
-            self.trump_enc = game_first_state[3:6]
-
-            self.current_player = self.game.players[current_player_id]
+        game_state = game_first_state
 
         # else:
         # StartGameAction not necessary with an already initialised game
@@ -298,6 +248,7 @@ class Env:
 
         # Option 1: (preferred)
         # pass 1st game state from data in dt_train to initialise all vars and pass it back
+        # Problem: Karten der anderen Spieler
 
         # Option 2: pass every necessary var
 
@@ -419,12 +370,62 @@ class Env:
 
         self.state = game_first_state
 
-        return np.array(game_first_state)
+        return np.array(game_state)
+
+    def put_skat(self, skat_card):
+        # split Skat putting into two actions:
+        # After the first action the first card of the Skat will not be visible in the state,
+        # after the second action the second card of the Skat will not be visible in the state
+        reward = 0
+
+        # put down the second Skat card
+        if not self.hand:
+            if self.current_player is self.game.get_declarer():
+                # # first Skat card as action
+                self.skat_down.append(skat_card)
+
+                # add the card value of second Skat card as reward
+                reward = Card.get_value(skat_card)
+
+                self.score[0] = Card.get_value(skat_card)
+
+            try:
+                self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), skat_card))
+            except ValueError:
+                raise exceptions.InvalidPlayerMove(
+                    f"Player {self.current_player.get_id()} is not holding card {skat_card}! "
+                    f"The hand cards are {self.current_player.cards}")
+
+            self.current_player.cards.sort()
+
+        return reward
+
+    def finish_game(self, reward):
+        if self.current_player.type != Player.Type.DECLARER:
+            self.score[1] += Card.get_value(self.skat_down[0]) + Card.get_value(self.skat_down[1])
+        game_points = self.get_game_points()
+
+        if self.hand:
+            # add reward in hand game of two unseen Skat cards
+            reward += Card.get_value(self.skat_down[0]) + Card.get_value(self.skat_down[1])
+
+        if self.point_rewards:
+            # if point_rewards add card points on top of achieved points...
+            if self.current_player.type == Player.Type.DECLARER:
+                # add the points to the soloist
+                reward = 0.9 * game_points + reward * 0.1  # rewards[-1] + soloist_points
+            else:
+                # subtract the game points
+                reward = -0.9 * game_points + reward * 0.1  # rewards[-1] + soloist_points
+        else:
+            # ...otherwise, give a 0 reward for lost and a positive reward for won games
+            reward *= 1 if game_points > 0 else 0
+
+        return reward
 
     def step(self, card_index):
-        # TODO: make step independent of existing env, use states, reset can be made independent (only change trump_enc)
 
-        # if the action is surrendering
+        # if the action is surrendering TODO: not -2 anymore
         if card_index[0] == -2:
             self.state_machine.handle_action(SurrenderAction(player=self.current_player))
             reward = self.current_player.current_trick_points
@@ -436,84 +437,25 @@ class Env:
         # default reward of 0
         reward = 0
 
-        open_cards = []
+        open_cards = [0] * card_dim + [0] * card_dim
 
         # the game is finished after 10 rounds
         done = (self.game.round == 10)
 
         #  padding from right to left: cards in env are in the same order
-
-        # split Skat putting into two actions:
-        # After the first action the first card of the Skat will not be visible in the state,
-        # after the second action the second card of the Skat will not be visible in the state
         if self.skat_put[0]:
-            # update status
-            self.skat_put[0] = False
-
-            # put down the second Skat card
-            if not self.hand:
-
-                if self.current_player is self.game.get_declarer():
-                    # # first Skat card as action
-                    self.skat_down.append(self.current_player.cards[card_index.index(1)])
-                    #
-                    # # add the card value of second Skat card as reward
-                    reward = Card.get_value(self.skat_down[0])
-
-                    self.score[0] = Card.get_value(self.skat_down[0])
-                    # TODO: maybe self.game.skat instead of init in data pipeline,
-                    #  in general: optimize variables
-
-                try:
-                    self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[0]))
-                except ValueError:
-                    raise exceptions.InvalidPlayerMove(
-                        f"Player {self.current_player.get_id()} is not holding card {self.skat_down[0]}! "
-                        f"The hand cards are {self.current_player.cards}")
-
-                self.current_player.cards.sort()
-
-            # last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
-
-            open_cards = [0] * card_dim + [0] * card_dim
+            reward = self.put_skat(card_index)
+            self.skat_put[0] = True
 
         elif self.skat_put[1]:
-            # update status
-            self.skat_put[1] = False
+            reward = self.put_skat(card_index)
+            self.skat_put[1] = True
 
-            # put down the second Skat card
-            if not self.hand:
-
-                if self.current_player is self.game.get_declarer():
-                    # second Skat card as action
-                    self.skat_down.append(self.current_player.cards[card_index.index(1)])
-                    #
-                    # # add the card value of second Skat card as reward
-                    reward = Card.get_value(self.skat_down[1])
-
-                    self.score[0] += Card.get_value(self.skat_down[1])
-
-                try:
-                    self.state_machine.handle_action(PutDownSkatAction(self.game.get_declarer(), self.skat_down[1]))
-                except ValueError:
-                    raise exceptions.InvalidPlayerMove(
-                        f"Player {self.current_player.get_id()} is not holding card {self.skat_down[1]}! "
-                        f"The hand cards are {self.current_player.cards}")
-
-            # after Skat putting, every player has 10 cards which need to be padded
-            # this state will be the third state, namely the one after Skat putting
-
-            # last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
-
-            open_cards = [0] * card_dim + [0] * card_dim
-
-            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
+            self.state_machine.handle_action(
+                DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
 
             # separate ifs for next open cards
-            if self.game.trick.get_current_player() == self.current_player:
-                # in position of first player, there are no open cards
-                open_cards = [0] * card_dim + [0] * card_dim
-            elif self.game.trick.get_next_player(self.current_player) == self.current_player:
+            if self.game.trick.get_next_player(self.current_player) == self.current_player:
                 # in position of the second player, there is one open card
                 open_cards = convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick - 1]) + [0] * card_dim
             else:
@@ -521,6 +463,7 @@ class Env:
                 open_cards = convert_one_hot_to_vector(
                     self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
                     self.skat_and_cs[3 * self.trick])
+
         else:
             # # if Skat is put in reset
             # if self.trick == 1 and self.current_player is self.game.get_declarer():
@@ -581,27 +524,8 @@ class Env:
         self.score[1] += self.game.get_last_trick_points() if self.current_player.current_trick_points == 0 else 0
         self.score[0] += self.current_player.current_trick_points
 
-        # TODO: get game_points
         if done:
-            if self.current_player.type != Player.Type.DECLARER:
-                self.score[1] += Card.get_value(self.skat_down[0]) + Card.get_value(self.skat_down[1])
-            game_points = self.get_game_points()
-
-            if self.hand:
-                # add reward in hand game of two unseen Skat cards
-                reward += Card.get_value(self.skat_down[0]) + Card.get_value(self.skat_down[1])
-
-            if self.point_rewards:
-                # if point_rewards add card points on top of achieved points...
-                if self.current_player.type == Player.Type.DECLARER:
-                    # add the points to the soloist
-                    reward = 0.9 * game_points + reward * 0.1  # rewards[-1] + soloist_points
-                else:
-                    # subtract the game points
-                    reward = -0.9 * game_points + reward * 0.1  # rewards[-1] + soloist_points
-            else:
-                # ...otherwise, give a 0 reward for lost and a positive reward for won games
-                reward *= 1 if game_points > 0 else 0
+            reward = self.finish_game(reward)
 
         game_state = self.pos_p + self.score + self.trump_enc + self.last_trick + open_cards + get_hand_cards(
             self.current_player)
@@ -610,6 +534,122 @@ class Env:
             self.last_trick = convert_one_hot_to_vector(
                 self.skat_and_cs[3 * self.trick - 1]) + convert_one_hot_to_vector(
                 self.skat_and_cs[3 * self.trick]) + convert_one_hot_to_vector(self.skat_and_cs[3 * self.trick + 1])
+
+        self.state = game_state
+
+        # Return state, reward, done
+        return np.array(game_state), reward, done
+
+    def online_reset(self):
+        self.game.reset()
+
+        self.state_machine = GameStateMachine(GameStateStart(self.game))
+        # shuffles and gives out cards
+        self.state_machine.handle_action(StartGameAction())
+
+        highest_score, soloist_pos, i = 0, 0, 0
+
+        soloist = None
+        trump = -1
+        for player in self.game.players:
+            i += 1
+            # lets the player with the best scoring cards play
+            kb_score, trump_player = calculate_kinback_scheme(player.cards, i)
+            if kb_score > highest_score:
+                highest_score = kb_score
+                soloist = player
+                trump = trump_player
+
+        self.state_machine.handle_action(BidCallAction(soloist, 18))
+        self.state_machine.handle_action(
+            BidPassAction(self.game.players[(soloist.get_id()) % 3], 18))  # id starts at 1
+        self.state_machine.handle_action(BidPassAction(self.game.players[(soloist.get_id() + 1) % 3], 18))
+
+        self.state_machine.handle_action(PickUpSkatAction(soloist))
+
+        self.current_player.cards.sort()
+
+        self.state_machine.handle_action(DeclareGameVariantAction(soloist, GameVariantSuit(trump)))
+        self.trump_enc = get_trump_enc(trump)
+
+        game_state = [[] * 3]
+
+        # determine the position of players
+        pos_p = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+
+        for current_player_id in range(3):
+            if self.game.get_declarer().get_id() == current_player_id:
+                # initialise positions of defender as -1
+                pos_p[current_player_id][(current_player_id + 1) % 3], pos_p[current_player_id][
+                    (current_player_id + 2) % 3] = -1, -1
+            elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
+                pos_p[current_player_id][(current_player_id + 1) % 3] = -1
+                pos_p[current_player_id][(current_player_id + 2) % 3] = 1
+            else:
+                pos_p[current_player_id][(current_player_id + 1) % 3] = 1
+                pos_p[current_player_id][(current_player_id + 2) % 3] = -1
+
+            game_state[current_player_id] = self.pos_p[current_player_id] + [0, 0] + self.trump_enc + self.last_trick \
+                                            + self.open_cards + get_hand_cards(self.game.players[current_player_id])
+
+        return game_state
+
+    def online_step(self, card_index):
+        # if the action is surrendering
+        if card_index[0] == -2:
+            self.state_machine.handle_action(SurrenderAction(player=self.current_player))
+            reward = self.current_player.current_trick_points
+            # pad the game state with 0s as a game-terminating signal
+            game_state = [[0] * state_dim]  # * (12 - self.game.round)]
+            # self.reset(current_player)
+            return game_state, reward, True
+
+        # select the card on the players hand
+        card = self.current_player.cards[card_index.index(1)]
+
+        # the reward has to encode the winning player
+        # default reward of 0
+        reward = (0, 0)
+
+        open_cards = [0] * card_dim + [0] * card_dim
+
+        # the game is finished after 10 rounds
+        done = (self.game.round == 10)
+
+        #  padding from right to left: cards in env are in the same order
+        if self.skat_put[0]:
+            reward = (self.game.get_declarer().id, self.put_skat(card))
+            self.skat_put[0] = True
+
+        elif self.skat_put[1]:
+            reward = (self.game.get_declarer().id, self.put_skat(card))
+            self.skat_put[1] = True
+
+            self.state_machine.handle_action(
+                DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
+        else:
+            self.state_machine.handle_action(PlayCardAction(player=self.current_player, card=card))
+
+            self.open_cards.append(card)
+
+            self.last_trick.append(card)
+
+        # end of trick
+        if len(self.open_cards) == 2:
+            # TODO: surrender
+            # the reward has to be passed after each trick and is not necessarily for the current agent
+            reward = (self.game.trick.leader.id, self.game.get_last_trick_points())
+
+            self.score[1] += self.game.get_last_trick_points() if self.current_player.current_trick_points == 0 else 0
+            self.score[0] += self.current_player.current_trick_points
+            self.last_trick = self.open_cards + [card]
+            self.open_cards = []
+
+        if done:
+            reward = self.finish_game(reward)
+
+        game_state = self.pos_p + self.score + self.trump_enc + self.last_trick + self.open_cards + get_hand_cards(
+            self.current_player)
 
         self.state = game_state
 
