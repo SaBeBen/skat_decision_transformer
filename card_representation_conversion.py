@@ -1,6 +1,24 @@
 from model.card import Card
 
 
+def convert_card_to_enc(card, encoding):
+    if encoding == "one-hot" or encoding == "one-hot_comp":
+        return convert_card_to_one_hot(card)
+    if encoding == "mixed" or encoding == "mixed_comp":
+        return convert_card_to_vector(card)
+    else:
+        raise NotImplementedError(f"The encoding {encoding} is not supported.")
+
+
+def convert_numerical_to_enc(card, encoding):
+    if encoding == "one-hot" or encoding == "one-hot_comp":
+        return convert_numerical_to_one_hot(card)
+    if encoding == "mixed" or encoding == "mixed_comp":
+        return convert_numerical_to_vector(card)
+    else:
+        raise NotImplementedError(f"The encoding {encoding} is not supported.")
+
+
 def convert_tuple_to_card(card):
     tuple_rep = {
         (0, 0, 0, 1, 7): Card(Card.Suit.CLUB, Card.Face.ACE),  # A♣
@@ -124,7 +142,7 @@ def convert_card_to_trump_vector(card, trump_enc):
     return converted_card
 
 
-def convert_card_to_cat_vector(card):
+def convert_card_to_one_hot(card):
     vector_rep = {
         Card(Card.Suit.CLUB, Card.Face.ACE): [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0],  # A♣
         Card(Card.Suit.CLUB, Card.Face.KING): [0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],  # K♣
@@ -164,7 +182,7 @@ def convert_card_to_cat_vector(card):
     return converted_card
 
 
-def convert_card_to_one_hot(card):
+def convert_card_to_numerical(card):
     card_rep = {
         Card(Card.Suit.CLUB, Card.Face.ACE): 1,  # A♣
         Card(Card.Suit.CLUB, Card.Face.KING): 2,  # K♣
@@ -204,7 +222,7 @@ def convert_card_to_one_hot(card):
     return converted_card
 
 
-def convert_one_hot_to_vector(card):
+def convert_numerical_to_vector(card):
     # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
     vector_rep = {
         0: [0, 0, 0, 1, 7],  # A♣
@@ -245,7 +263,7 @@ def convert_one_hot_to_vector(card):
     return converted_card
 
 
-def convert_one_hot_to_trump_vector(card, trump_enc):
+def convert_numerical_to_trump_vector(card, trump_enc):
     # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
     vector_rep = {
         0: [0, 0, 0, 1, 7, 0],  # A♣
@@ -289,7 +307,7 @@ def convert_one_hot_to_trump_vector(card, trump_enc):
     return converted_card
 
 
-def convert_one_hot_to_cat_vector(card):
+def convert_numerical_to_one_hot(card):
     # first 4 cat enc are used for suit, the other 8 for the face
     vector_rep = {
         0: [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0],  # A♣
@@ -330,7 +348,7 @@ def convert_one_hot_to_cat_vector(card):
     return converted_card
 
 
-def convert_one_hot_to_tuple(card):
+def convert_numerical_to_tuple(card):
     # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
     tuple_rep = {
         0: (0, 0, 0, 1, 7),  # A♣
@@ -451,7 +469,7 @@ def convert_card_to_tuple(card):
 #     return converted_card
 
 
-def convert_one_hot_to_card(card):
+def convert_numerical_to_card(card):
     # in the beginning, the card values start at 0, but 0s are used to pad the states -> need for other representation
     vector_rep = {
         0: Card(Card.Suit.CLUB, Card.Face.ACE),  # A♣

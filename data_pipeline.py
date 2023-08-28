@@ -6,8 +6,8 @@ import pandas as pd
 
 from tqdm import tqdm
 
-from card_representation_conversion import convert_one_hot_to_card, convert_one_hot_to_vector, convert_card_to_vector
-from environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards
+from card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
+from environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards, act_dim, initialise_encoding
 from exceptions import InvalidPlayerMove
 
 from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
@@ -17,19 +17,6 @@ from game.state.game_state_play import PlayCardAction
 
 from model.player import Player
 from model.card import Card
-
-# actions are a vector which encodes the cards to select categorically
-act_dim = 12
-
-# cards are a vector, first 4 entries are a one-hot encoding of the suit, the fifth is the face encoded by an integer
-card_dim = 5
-
-# for padding of hand_cards, it is the maximum size with a compressed card representation
-max_hand_len = 16 + act_dim  # 12 * card_dim  # 28
-
-# position co-player (3) + trump (4) + last trick (3 * card_dim)
-# + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
 
 possible_championships = ["wc", "gc", "gtc", "bl", "rc"]
 
@@ -110,7 +97,7 @@ def get_game(game="wc", games_indices=slice(0, -1)):
     return skat_game_data.to_numpy(), skat_and_cs
 
 
-def surrender(won, current_player, soloist_points, trick, game_state, actions, rewards):
+def surrender(won, current_player, soloist_points, trick, game_state, actions, rewards, state_dim):
     # if game was surrendered by defenders out of the perspective of soloist or
     # if game was surrendered by soloist out of the perspective of a defender
     if won:
@@ -151,10 +138,12 @@ def get_states_actions_rewards(
         games_indices=slice(0, 1000),
         point_rewards=False,
         game_index=-1,
-        perspective=(0, 1, 2)
-        ):
-
+        perspective=(0, 1, 2),
+        card_enc='mixed_comp'
+):
     meta_and_cards, skat_and_cs = get_game(game=championship, games_indices=games_indices)
+
+    card_dim, max_hand_len, state_dim = initialise_encoding(card_enc)
 
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
@@ -193,7 +182,7 @@ def get_states_actions_rewards(
                 card_error_games.append(game[0])
                 break
 
-            env = Env()
+            env = Env(enc=card_enc)
 
             # player_id: ID of current solo player
             # trump: game the soloist plays
@@ -213,11 +202,11 @@ def get_states_actions_rewards(
             env.state_machine.state_finished_handler()
 
             # initialize the Skat
-            skat_up = [convert_one_hot_to_card(game[34]), convert_one_hot_to_card(game[35])]
+            skat_up = [convert_numerical_to_card(game[34]), convert_numerical_to_card(game[35])]
 
             # put down Skat...
-            skat_down = [convert_one_hot_to_card(skat_and_cs[cs_index, 0]),
-                         convert_one_hot_to_card(skat_and_cs[cs_index, 1])]
+            skat_down = [convert_numerical_to_card(skat_and_cs[cs_index, 0]),
+                         convert_numerical_to_card(skat_and_cs[cs_index, 1])]
 
             # initialise Skat in the environment
             env.game.skat.extend([skat_up[0], skat_up[1]])
@@ -301,8 +290,8 @@ def get_states_actions_rewards(
             # last_trick = [[0] * card_dim, [0] * card_dim, [0] * card_dim]
             last_trick = [0] * card_dim + [0] * card_dim + [0] * card_dim
 
-            skat1 = convert_one_hot_to_card(skat_and_cs[cs_index, 0])
-            skat2 = convert_one_hot_to_card(skat_and_cs[cs_index, 1])
+            skat1 = convert_numerical_to_card(skat_and_cs[cs_index, 0])
+            skat2 = convert_numerical_to_card(skat_and_cs[cs_index, 1])
 
             if not hand:
                 # pick up the Skat
@@ -318,7 +307,8 @@ def get_states_actions_rewards(
                     # fs_one_game.suit = trump
 
                 # first game state + score
-                game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+                game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player,
+                                                                                                  encoding=card_enc)
 
                 # ...put down Skat one by one
                 # each Skat card needs its own action (due to fixed dimensions)
@@ -344,9 +334,10 @@ def get_states_actions_rewards(
                     score[0] += skat1.get_value()
 
                     # the last trick is the put Skat and padding in the beginning
-                    last_trick = convert_card_to_vector(skat1) + [0] * card_dim + [0] * card_dim
+                    last_trick = convert_card_to_enc(skat1, encoding=card_enc) + [0] * card_dim + [0] * card_dim
 
-                    game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+                    game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(
+                        current_player, encoding=card_enc)
 
                     # categorical encoding of played card as action: put second card
                     cat_action = [0] * act_dim
@@ -369,7 +360,8 @@ def get_states_actions_rewards(
                     score[0] += skat2.get_value()
 
                     # the last trick is the put Skat and padding in the beginning
-                    last_trick = convert_card_to_vector(skat1) + convert_card_to_vector(skat2) + [0] * card_dim
+                    last_trick = convert_card_to_enc(skat1, encoding=card_enc) + convert_card_to_enc(
+                        skat2, encoding=card_enc) + [0] * card_dim
 
                     # it is not necessary to simulate sequential putting with actions and rewards
                     # instantly get rewards of the put Skat
@@ -383,7 +375,8 @@ def get_states_actions_rewards(
                     actions += [[0] * act_dim, [0] * act_dim]
                     rewards += [0, 0]
 
-                    game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+                    game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(
+                        current_player, encoding=card_enc)
 
                     try:
                         # put Skat down in the environment
@@ -407,9 +400,11 @@ def get_states_actions_rewards(
 
                 # if hand is played, there are two identical game states from the perspective of every player
 
-                game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+                game_state = pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player,
+                                                                                                  encoding=card_enc)
 
-                game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player)
+                game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(current_player,
+                                                                                                   encoding=card_enc)
 
             # declare the game variant
             declare_game_variant(env, trump)
@@ -422,7 +417,7 @@ def get_states_actions_rewards(
             # if the game is surrendered instantly
             if surrendered_trick == 0:
                 game_state, actions, rewards = \
-                    surrender(won, current_player, soloist_points, 0, game_state, actions, rewards)
+                    surrender(won, current_player, soloist_points, 0, game_state, actions, rewards, state_dim)
             else:
                 # iterate over each trick
                 for trick in range(1, 11):
@@ -438,12 +433,12 @@ def get_states_actions_rewards(
                         # in position of first player, there are no open cards
                         open_cards = [0] * card_dim + [0] * card_dim
 
-                        game_state += open_cards + get_hand_cards(current_player)
+                        game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
 
                         cat_action = [0] * act_dim
                         try:
                             cat_action[current_player.cards.index(
-                                convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick - 1]))] = 1
+                                convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1]))] = 1
                             actions.append(cat_action)
                         except ValueError:
                             skip = True
@@ -454,7 +449,7 @@ def get_states_actions_rewards(
                         # each time PlayCardAction is called the role of the current player rotates
                         env.state_machine.handle_action(
                             PlayCardAction(player=env.game.trick.leader,
-                                           card=convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick - 1])))
+                                           card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1])))
                     except ValueError or InvalidPlayerMove:
                         skip = True
                         break
@@ -462,16 +457,16 @@ def get_states_actions_rewards(
                     # if the player sits in the middle of this trick
                     if env.game.trick.get_current_player() == current_player:
                         # in position of the second player, there is one open card
-                        open_cards = convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick - 1]) + [
-                            0] * card_dim
+                        open_cards = convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick - 1],
+                                                              encoding=card_enc) + [0] * card_dim
 
-                        game_state += open_cards + get_hand_cards(current_player)
+                        game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
 
                         cat_action = [0] * act_dim
                         try:
                             cat_action[
                                 current_player.cards.index(
-                                    convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick]))] = 1
+                                    convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick]))] = 1
                             actions.append(cat_action)
                         except ValueError:
                             skip = True
@@ -482,7 +477,7 @@ def get_states_actions_rewards(
                         # each time PlayCardAction is called the role of the current player rotates
                         env.state_machine.handle_action(
                             PlayCardAction(player=env.game.trick.get_current_player(),
-                                           card=convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick])))
+                                           card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick])))
                     except ValueError or InvalidPlayerMove:
                         skip = True
                         break
@@ -490,15 +485,16 @@ def get_states_actions_rewards(
                     # if the player sits in the rear of this trick
                     if env.game.trick.get_current_player() == current_player:
                         # in position of the third player, there are two open cards
-                        open_cards = convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick - 1]) + \
-                                     convert_one_hot_to_vector(skat_and_cs[cs_index, 3 * trick])
+                        open_cards = convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick - 1],
+                                                              encoding=card_enc) + \
+                                     convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick], encoding=card_enc)
 
-                        game_state += open_cards + get_hand_cards(current_player)
+                        game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
 
                         cat_action = [0] * act_dim
                         try:
                             cat_action[current_player.cards.index(
-                                convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick + 1]))] = 1
+                                convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1]))] = 1
                             actions.append(cat_action)
                         except ValueError:
                             skip = True
@@ -509,20 +505,21 @@ def get_states_actions_rewards(
                         # each time PlayCardAction is called the role of the current player rotates
                         env.state_machine.handle_action(
                             PlayCardAction(player=env.game.trick.get_current_player(),
-                                           card=convert_one_hot_to_card(skat_and_cs[cs_index, 3 * trick + 1])))
+                                           card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1])))
                     except ValueError or InvalidPlayerMove:
                         skip = True
                         break
 
-                    last_trick = convert_one_hot_to_vector(
-                        skat_and_cs[cs_index, 3 * trick - 1]) + convert_one_hot_to_vector(
-                        skat_and_cs[cs_index, 3 * trick]) + convert_one_hot_to_vector(
-                        skat_and_cs[cs_index, 3 * trick + 1])
+                    last_trick = convert_numerical_to_enc(
+                        skat_and_cs[cs_index, 3 * trick - 1], encoding=card_enc) + convert_numerical_to_enc(
+                        skat_and_cs[cs_index, 3 * trick], encoding=card_enc) + convert_numerical_to_enc(
+                        skat_and_cs[cs_index, 3 * trick + 1], encoding=card_enc)
 
                     # check if game was surrendered at this trick
                     if surrendered_trick == trick:
                         game_state, actions, rewards = \
-                            surrender(won, current_player, soloist_points, trick, game_state, actions, rewards)
+                            surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                      state_dim)
                         break
                     else:
                         rewards.append(current_player.current_trick_points)
@@ -575,16 +572,15 @@ def get_states_actions_rewards(
         "rewards": rewards_table,
     }, card_error_games
 
-
 # if __name__ == '__main__':
-    # for championship in possible_championships:
-    #     point_rewards = True
-    #     print(f"Reading in championship {championship}")
-    #     data, _ = get_states_actions_rewards(championship,
-    #                                          games_indices=slice(0, -1),
-    #                                          point_rewards=point_rewards)
-    #     data_frame = pd.DataFrame(data)
-    #     data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
-    #     dataset = DatasetDict({"train": Dataset.from_dict(data_train),
-    #                            "test": Dataset.from_dict(data_test)})
-    #     dataset.save_to_disk(f"./datasets/{championship}_without_surr_and_passed-pr_{point_rewards}")
+# for championship in possible_championships:
+#     point_rewards = True
+#     print(f"Reading in championship {championship}")
+#     data, _ = get_states_actions_rewards(championship,
+#                                          games_indices=slice(0, -1),
+#                                          point_rewards=point_rewards)
+#     data_frame = pd.DataFrame(data)
+#     data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
+#     dataset = DatasetDict({"train": Dataset.from_dict(data_train),
+#                            "test": Dataset.from_dict(data_test)})
+#     dataset.save_to_disk(f"./datasets/{championship}_without_surr_and_passed-pr_{point_rewards}")

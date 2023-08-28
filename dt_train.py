@@ -5,7 +5,6 @@ To achieve a speed-up and more modularity, the Huggingface implementation of the
 See https://huggingface.co/blog/train-decision-transformers for more information.
 """
 
-
 import argparse
 import math
 import random
@@ -29,7 +28,7 @@ from transformers.models.decision_transformer.modeling_decision_transformer impo
 from transformers.trainer_utils import speed_metrics, IntervalStrategy
 
 import data_pipeline
-import environment
+from environment import act_dim, initialise_encoding, Env
 
 # %%
 # def set_memory_limit(limit_gb):
@@ -37,26 +36,16 @@ import environment
 #     resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
 #
 #
-# set_memory_limit(16)
+# set_memory_limit(64)
 
 MAX_EPISODE_LENGTH = 12
-
-act_dim = 12
-card_dim = 5
-
-# for padding of hand_cards, it is the maximum size with a compressed card representation
-max_hand_len = 16 + act_dim  # 12 * card_dim
-
-# position co-player (3) + score (2) + trump (4) + last trick (3 * card_dim)
-# + open cards (2 * card_dim) + hand cards (12 * card_dim)
-state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len  # 12 * card_dim
 
 
 @dataclass
 class DecisionTransformerSkatDataCollator:
     return_tensors: str = "pt"  # pytorch
     max_len: int = MAX_EPISODE_LENGTH  # subsets of the episode we use for training, our episode length is short
-    state_dim: int = state_dim  # size of state space
+    state_dim: int = 0  # size of state space
     act_dim: int = act_dim  # size of action space
     max_ep_len: int = MAX_EPISODE_LENGTH  # max episode length in the dataset
     scale: float = 1.0  # normalization of rewards/returns
@@ -150,9 +139,8 @@ class DecisionTransformerSkatDataCollator:
                 print("if true")
                 rtg[-1] = np.concatenate([rtg[-1], np.zeros((1, 1, 1))], axis=1)
 
+            # trajectory length
             tlen = s[-1].shape[1]
-
-            # states, actions, rewards are already padded
 
             padding = np.zeros((1, self.max_len - tlen, self.state_dim))
             s[-1] = np.concatenate([padding, s[-1]], axis=1)
@@ -281,13 +269,13 @@ class TrainableDT(DecisionTransformerModel):
         output = self.originalForward(**kwargs)  # super().forward(**kwargs)
         # add the DT loss
         action_preds = output[1]
-        action_targets = kwargs["actions"]
-        attention_mask = kwargs["attention_mask"]
+        action_targets = kwargs["actions"].to(self.device)
+        attention_mask = kwargs["attention_mask"].to(self.device)
         # act_dim = action_preds.shape[1]  # 2
 
         # exclude actions that are not attended to
-        action_preds = action_preds.reshape(-1, act_dim)  # [attention_mask.reshape(-1) > 0]
-        action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0]
+        action_preds = action_preds.reshape(-1, act_dim).to(self.device)  # [attention_mask.reshape(-1) > 0]
+        action_targets = action_targets.reshape(-1, act_dim)[attention_mask.reshape(-1) > 0].to(self.device)
 
         # TODO: rather output softmax predictions and maybe have a sm layer (careful with attn mask)
         #  or calculate everything after prediction (closer to original implementation)
@@ -341,7 +329,7 @@ class TrainableDT(DecisionTransformerModel):
         # In the third trick (without Skat putting), only 7 cards can be selected,
         # actions could try to falsely select a 9th card
         # amount_past_tricks = kwargs["timesteps"][:, -1]
-        timesteps = kwargs["timesteps"]
+        timesteps = kwargs["timesteps"].to(self.device)
         hand_card_length = torch.sub(12, timesteps.reshape(-1)[attention_mask.reshape(-1) > 0])
 
         actions_oob = torch.nonzero(torch.div(action_taken, hand_card_length, rounding_mode='trunc'))
@@ -513,7 +501,7 @@ class DTTrainer(Trainer):
 def run_training(args):
     # game specific arguments
     championship = args['championship']
-    # data_format = args['data_format']
+    hand_encoding = args['hand_encoding']
     point_rewards = args['point_rewards']
     games_to_load = slice(args['games'][0], args['games'][1])
     perspective = args['perspective']
@@ -531,22 +519,34 @@ def run_training(args):
     logging_steps = args['logging_steps']
     use_cuda = args['use_cuda']
     save_model = args['save_model']
+    pretrained_model_path = args['pretrained_model']
 
-    if torch.cuda.is_available() and use_cuda:
-        device = torch.device('cuda')
+    # if torch.cuda.is_available() and use_cuda:
+    #     device = torch.device('cuda')
+    # else:
+    #     device = torch.device('cpu')
+
+    card_dim, max_hand_len, state_dim = initialise_encoding(hand_encoding)
+
+    episode_length = (state_dim + act_dim + 1) * MAX_EPISODE_LENGTH
+
+    # ensure that our sequence length fits in the context length
+    if episode_length > 1024:
+        context_length = 2048
     else:
-        device = torch.device('cpu')
+        context_length = 1024
 
     if games_to_load.stop == -1:
         dataset = load_dataset("./datasets/wc_without_surr_and_passed_pr_True")
     else:
-        print("Loading data...")
+        print("\nLoading data...")
         game_index = 5
         data, _ = data_pipeline.get_states_actions_rewards(championship=championship,
                                                            games_indices=games_to_load,
                                                            point_rewards=point_rewards,
                                                            game_index=game_index,
-                                                           perspective=perspective)
+                                                           perspective=perspective,
+                                                           card_enc=hand_encoding)
 
         data_frame = pd.DataFrame(data)
         if data_frame.shape[0] == 1:
@@ -571,7 +571,7 @@ def run_training(args):
         n_layer=n_layer,
         max_ep_len=MAX_EPISODE_LENGTH,  # each episode is a game -> 12 tuples of s,a,r make up 1 game
         # vocab_size=1200,  # there are 32 cards + pos_tp + score +  + trump_enc
-        n_positions=1024,
+        n_positions=context_length,
         scale_attn_weights=True,
         # embd_pdrop=dropout,
         resid_pdrop=dropout,
@@ -579,16 +579,22 @@ def run_training(args):
         max_length=MAX_EPISODE_LENGTH,
     )
 
-    # pretrained_model = TrainableDT.from_pretrained(
-    #     "./pretrained_models/Tue_Aug_22_22-42-38_2023-games_1000-0-sampled")
-    # model = pretrained_model
+    if pretrained_model_path is not None:
+        pretrained_model = TrainableDT.from_pretrained(
+            f"./pretrained_models/{pretrained_model_path}")
+        model = pretrained_model
+    else:
+        model = TrainableDT(config)
 
-    model = TrainableDT(config)
-
-    if torch.cuda.is_available():
-        model = model.cuda(device)
+    # if torch.cuda.is_available():
+    #     model = model.cuda(device)
 
     # model = model.to(device)
+    current_time = time.asctime().replace(':', '-').replace(' ', '_')
+
+    dir_name = rf"games_{games_to_load.start}-{games_to_load.stop}-encoding_{hand_encoding}-point_rewards_{point_rewards}-{current_time}"
+
+    logging_dir = rf"./training-logs/{dir_name}"
 
     training_args = TrainingArguments(
         report_to=["tensorboard"],
@@ -602,9 +608,7 @@ def run_training(args):
         optim="adamw_torch",
         max_grad_norm=0.1,
         logging_steps=logging_steps,
-        logging_dir=rf"./training-logs/"
-                    rf"{time.asctime().replace(':', '-').replace(' ', '_')}-games_"
-                    rf"{games_to_load.stop}-{games_to_load.start}-sampled",
+        logging_dir=logging_dir,
         bf16=True,
         save_steps=5000
         # do_eval=True,
@@ -624,7 +628,7 @@ def run_training(args):
         # callbacks=[tensorboard_callback]  # here or in "report_to" of args
     )
 
-    print("Training...")
+    print(f"\nTraining with {hand_encoding} encoding...")
     trainer.train()
 
     # for tensorboard visualization:
@@ -642,11 +646,7 @@ def run_training(args):
     # trainer.model = pretrained_model
 
     if save_model:
-        model.save_pretrained(
-            rf"./pretrained_models/"
-            rf"{time.asctime().replace(':', '-').replace(' ', '_')}-"
-            rf"games_{games_to_load.start}-{games_to_load.stop}-"
-            rf"point_rewards_{point_rewards}")
+        model.save_pretrained(rf"./pretrained_models/{dir_name}")
 
     training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
 
@@ -660,7 +660,7 @@ def run_training(args):
 # ------------------------------------------------------------------------------------
 #                           Interactive Implementation
 
-def interactive_env(model, point_reward):
+def interactive_env(model, point_reward, state_dim, card_enc):
     # Function that gets an action from the model using autoregressive prediction
     # with a window of the previous 20 timesteps. We only need a maximum of 12 timesteps
     def get_action(model, states, actions, rewards, returns_to_go, timesteps):
@@ -722,7 +722,7 @@ def interactive_env(model, point_reward):
     scale = 1
 
     # env = environment.Env() if one_game is None else one_game
-    env = environment.Env()
+    env = Env(card_enc)
 
     # initialise s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
@@ -730,7 +730,7 @@ def interactive_env(model, point_reward):
     for games in range(1):
 
         # build the environment for the evaluation
-        states[0], states[1], states[2] = env.online_reset()
+        states = env.online_reset()
 
         if point_reward:
             if sum(env.trump_enc) == 0:
@@ -748,17 +748,15 @@ def interactive_env(model, point_reward):
             # if the reward are only the card points
             target_return = 2 * 120
 
-        for current_player in range(3):
-            target_return[current_player] = torch.tensor(target_return).float().reshape(1, 1)
-            states[current_player] = torch.from_numpy(states[current_player]).reshape(1, state_dim).float()
-            actions[current_player] = torch.zeros((0, act_dim)).float()
-            rewards[current_player] = torch.zeros(0).float()
-            timesteps[current_player] = torch.tensor(0).reshape(1, 1).long()
-            actions_pred_eval[current_player] = torch.zeros((0, act_dim)).float()
+        target_return = torch.tensor([target_return] * 3).float().reshape(3, 1)
+        states = torch.from_numpy(states).reshape(3, state_dim).float().reshape(3, 1)
+        actions = torch.zeros((3, act_dim)).float().reshape(3, 1)
+        rewards = torch.zeros(3).float().reshape(3, 1)
+        timesteps = torch.ones(3).reshape(3, 1).long()
+        actions_pred_eval = torch.zeros((3, act_dim)).float()
 
         # take steps in the environment (evaluation, not training)
         for t in range(MAX_EPISODE_LENGTH):
-
             for current_player in range(3):
                 # add zeros for actions as input for the current time-step
                 actions[current_player] = torch.cat([actions[current_player], torch.zeros((1, act_dim))], dim=0)
@@ -824,6 +822,14 @@ def interactive_env(model, point_reward):
             print(f"Difference of target reward and reached reward of player {current_player}: {diff_target_reached}")
 
 
+def model_file(rel_path: str):
+    from os.path import exists
+    if not exists(rel_path):
+        raise argparse.ArgumentTypeError("Model file does not exist")
+    else:
+        return rel_path
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='Skat_Decision_Transformer_trainer',
                                      description='Trains a Decision Transformer on a championship dataset using '
@@ -838,7 +844,7 @@ if __name__ == '__main__':
     parser.add_argument('--championship', '-cs', type=str, default='wc', choices=['wc', 'gc', 'gtc', 'bl', 'rc'],
                         help='dataset of championship to select from')
     # parser.add_argument('--data_format', type=str, default='mixed', choices=['one-hot', 'mixed'])
-    parser.add_argument('--games', type=int, default=(0, 10), nargs="+",
+    parser.add_argument('--games', type=int, default=(0, 100), nargs="+",
                         help='the games to load')
     parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
                         help='get the game from the perspective of these players. ',
@@ -860,6 +866,12 @@ if __name__ == '__main__':
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
     parser.add_argument('--logging_steps', type=int, default=20)
+    parser.add_argument('--hand_encoding', type=str, default='mixed',
+                        choices=['mixed', 'mixed_comp', 'one-hot', 'one-hot_comp'],
+                        help='The encoding of cards in the state.')
+    parser.add_argument('--pretrained_model', type=model_file, default=None,
+                        help="Takes relative path as argument for the pretrained model which should be used. "
+                             "The model has to be stored in the folder 'pretrained_models'.")
 
     args = parser.parse_args()
 
