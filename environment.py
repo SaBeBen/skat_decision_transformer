@@ -17,22 +17,24 @@ from model.card import Card
 from model.player import Player
 
 # # card representation is a vector
-act_dim = 12
+ACT_DIM = 12
+
+card_encodings = ["mixed_comp", "mixed", "one-hot_comp", "one-hot"]
 
 
-def initialise_encoding(encoding: str):
+def get_dims_in_enc(encoding: str):
     if encoding == "mixed_comp":
         card_dim = 5
-        max_hand_len = 16 + act_dim
+        max_hand_len = 16 + ACT_DIM
     elif encoding == "mixed":
         card_dim = 5
-        max_hand_len = card_dim * act_dim
+        max_hand_len = card_dim * ACT_DIM
     elif encoding == "one-hot_comp":
         card_dim = 12
         max_hand_len = 12 * 4
     elif encoding == "one-hot":
         card_dim = 12
-        max_hand_len = card_dim * act_dim
+        max_hand_len = card_dim * ACT_DIM
     else:
         raise NotImplementedError(f"The encoding {encoding} is not supported. Supported encodings are "
                                   f"'mixed', 'one-hot', 'mixed_comp' and one-hot_comp.")
@@ -67,7 +69,7 @@ def get_hand_cards(current_player: Player, encoding="mixed_comp"):
         # [1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
         # [0] * (max_hand_length - 12)
 
-        max_hand_len = 16 + act_dim
+        max_hand_len = 16 + ACT_DIM
         last_card = None
         for card in current_player.cards:
             if last_card is not None and card.suit == last_card.suit:
@@ -86,7 +88,7 @@ def get_hand_cards(current_player: Player, encoding="mixed_comp"):
         # [0, 0, 0, 1, 1], [0, 0, 0, 1, 3], [0, 0, 0, 1, 8]
 
         card_dim = 5
-        max_hand_len = card_dim * act_dim
+        max_hand_len = card_dim * ACT_DIM
         for card in current_player.cards:
             hand_cards += convert_card_to_enc(card, encoding)
         hand_cards += [0] * (max_hand_len - len(hand_cards))
@@ -120,7 +122,7 @@ def get_hand_cards(current_player: Player, encoding="mixed_comp"):
         # [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]
 
         card_dim = 12
-        max_hand_len = card_dim * act_dim
+        max_hand_len = card_dim * ACT_DIM
         for card in current_player.cards:
             hand_cards += convert_card_to_enc(card, encoding)
         hand_cards += [0] * (max_hand_len - len(hand_cards))
@@ -250,8 +252,8 @@ class Env:
         self.game = Game([self.player1, self.player2, self.player3])
         self.state_machine = GameStateMachine(GameStateStart(self.game))
 
-        self.action_space = act_dim
-        self.state_dim, _, self.card_dim = initialise_encoding(enc)
+        self.action_space = ACT_DIM
+        self.state_dim, _, self.card_dim = get_dims_in_enc(enc)
         self.point_rewards = False
 
         self.state = None

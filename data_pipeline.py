@@ -3,11 +3,13 @@ from math import floor
 
 import numpy as np
 import pandas as pd
+from datasets import DatasetDict, Dataset
+from sklearn.model_selection import train_test_split
 
 from tqdm import tqdm
 
 from card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
-from environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards, act_dim, initialise_encoding
+from environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
 from exceptions import InvalidPlayerMove
 
 from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
@@ -18,11 +20,11 @@ from game.state.game_state_play import PlayCardAction
 from model.player import Player
 from model.card import Card
 
-possible_championships = ["wc", "gc", "gtc", "bl", "rc"]
+POSSIBLE_CHAMPIONSHIPS = ["wc", "bl", "gc", "gtc", "rc"]
 
 
 def get_game(game="wc", games_indices=slice(0, -1)):
-    if game not in possible_championships:
+    if game not in POSSIBLE_CHAMPIONSHIPS:
         raise ValueError(f"The championship {game} does not exist in the database.")
 
     skat_cs_path = f"data/{game}_card_sequence.CSV"
@@ -103,16 +105,16 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
     if won:
         # add reward and player points as last reward
         rewards.append(current_player.current_trick_points + soloist_points)
-        actions.append([0] * act_dim)
+        actions.append([0] * ACT_DIM)
     else:
         # action of surrendering
-        actions.append([1] * act_dim)
+        actions.append([1] * ACT_DIM)
         # default behaviour (gives a negative reward here)
         rewards.append(current_player.current_trick_points)
 
     # pad the states, actions and rewards with 0s
     game_state += ([0] * state_dim) * (10 - trick)
-    actions = actions + [[0] * act_dim] * (9 - trick)
+    actions = actions + [[0] * ACT_DIM] * (9 - trick)
     rewards = rewards + [0] * (10 - trick)
 
     return game_state, actions, rewards
@@ -143,7 +145,7 @@ def get_states_actions_rewards(
 ):
     meta_and_cards, skat_and_cs = get_game(game=championship, games_indices=games_indices)
 
-    card_dim, max_hand_len, state_dim = initialise_encoding(card_enc)
+    card_dim, max_hand_len, state_dim = get_dims_in_enc(card_enc)
 
     # position of the team player with respect to own pos; if 0 -> soloist
     # alternating players perspective = {FH/MH/RH}
@@ -161,7 +163,7 @@ def get_states_actions_rewards(
 
     game_state_table = [[] * state_dim * 10] * amount_games * len_p
 
-    actions_table = [[] * act_dim * 10] * amount_games * len_p
+    actions_table = [[] * ACT_DIM * 10] * amount_games * len_p
 
     rewards_table = [[] * 10] * amount_games * len_p
 
@@ -314,7 +316,7 @@ def get_states_actions_rewards(
                 # each Skat card needs its own action (due to fixed dimensions)
                 if current_player.type == Player.Type.DECLARER:
                     # categorical encoding of played card as action: put first card
-                    cat_action = [0] * act_dim
+                    cat_action = [0] * ACT_DIM
                     try:
                         cat_action[current_player.cards.index(skat1)] = 1
                         actions.append(cat_action)
@@ -340,7 +342,7 @@ def get_states_actions_rewards(
                         current_player, encoding=card_enc)
 
                     # categorical encoding of played card as action: put second card
-                    cat_action = [0] * act_dim
+                    cat_action = [0] * ACT_DIM
                     try:
                         cat_action[current_player.cards.index(skat2)] = 1
                         actions.append(cat_action)
@@ -372,7 +374,7 @@ def get_states_actions_rewards(
                     # thus it is padded and the defenders cards do not change
 
                     # there is no action during the Skat putting for the defenders
-                    actions += [[0] * act_dim, [0] * act_dim]
+                    actions += [[0] * ACT_DIM, [0] * ACT_DIM]
                     rewards += [0, 0]
 
                     game_state += pos_p + score + trump_enc + last_trick + open_cards + get_hand_cards(
@@ -395,7 +397,7 @@ def get_states_actions_rewards(
                     # fs_one_game.suit = trump
 
                 # there is no action during the Skat putting when playing hand
-                actions.extend([[0] * act_dim, [0] * act_dim])
+                actions.extend([[0] * ACT_DIM, [0] * ACT_DIM])
                 rewards.extend([0, 0])
 
                 # if hand is played, there are two identical game states from the perspective of every player
@@ -435,7 +437,7 @@ def get_states_actions_rewards(
 
                         game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
 
-                        cat_action = [0] * act_dim
+                        cat_action = [0] * ACT_DIM
                         try:
                             cat_action[current_player.cards.index(
                                 convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1]))] = 1
@@ -462,7 +464,7 @@ def get_states_actions_rewards(
 
                         game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
 
-                        cat_action = [0] * act_dim
+                        cat_action = [0] * ACT_DIM
                         try:
                             cat_action[
                                 current_player.cards.index(
@@ -491,7 +493,7 @@ def get_states_actions_rewards(
 
                         game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
 
-                        cat_action = [0] * act_dim
+                        cat_action = [0] * ACT_DIM
                         try:
                             cat_action[current_player.cards.index(
                                 convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1]))] = 1
@@ -558,7 +560,7 @@ def get_states_actions_rewards(
             # in the end of each game, insert the states, actions and rewards
             # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
             # insert states
-            game_state_table[3 * cs_index + i] = np.array_split(game_state, act_dim)  # [float(i) for i in game_state]
+            game_state_table[3 * cs_index + i] = np.array_split(game_state, ACT_DIM)  # [float(i) for i in game_state]
             # insert actions
             actions_table[3 * cs_index + i] = actions  # np.array_split([float(i) for i in actions], 12)
             # insert rewards
@@ -572,15 +574,32 @@ def get_states_actions_rewards(
         "rewards": rewards_table,
     }, card_error_games
 
-# if __name__ == '__main__':
-# for championship in possible_championships:
-#     point_rewards = True
-#     print(f"Reading in championship {championship}")
-#     data, _ = get_states_actions_rewards(championship,
-#                                          games_indices=slice(0, -1),
-#                                          point_rewards=point_rewards)
-#     data_frame = pd.DataFrame(data)
-#     data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
-#     dataset = DatasetDict({"train": Dataset.from_dict(data_train),
-#                            "test": Dataset.from_dict(data_test)})
-#     dataset.save_to_disk(f"./datasets/{championship}_without_surr_and_passed-pr_{point_rewards}")
+
+if __name__ == '__main__':
+    # def set_memory_limit(limit_gb):
+    #     limit_bytes = limit_gb * 1024 * 1024 * 1024  # Convert MB to bytes
+    #     resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+    #
+    # set_memory_limit(64)
+
+    card_encodings = ["mixed_comp", "mixed", "one-hot_comp", "one-hot"]
+    for championship in POSSIBLE_CHAMPIONSHIPS:
+        point_rewards = True
+        print(f"Reading in championship {championship}...")
+        if championship == "wc":
+            card_encodings = ["mixed", "one-hot_comp", "one-hot"]
+        else:
+            card_encodings = ["mixed_comp", "mixed", "one-hot_comp", "one-hot"]
+        for enc in card_encodings:
+            print(f"...with encoding {enc}...")
+            # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)
+
+            data, _ = get_states_actions_rewards(championship,
+                                                 games_indices=slice(0, -1),
+                                                 point_rewards=point_rewards,
+                                                 card_enc=enc)
+            data_frame = pd.DataFrame(data)
+            data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
+            dataset = DatasetDict({"train": Dataset.from_dict(data_train),
+                                   "test": Dataset.from_dict(data_test)})
+            dataset.save_to_disk(f"./datasets/{championship}_without_surr_and_passed-pr_{point_rewards}_{enc}")
