@@ -113,7 +113,7 @@ class DecisionTransformerSkatDataCollator:
             # To be able to jump into one game -> predict from every position and improve training
             # jumping randomly into a surrendered game could not work well
             # ->  We encode whether card should be played in states (see data_pipeline)
-            si = random.randint(1, len(feature["rewards"]))
+            si = len(feature["rewards"])  # random.randint(1, len(feature["rewards"]))
 
             #  fixed frame of 12 timesteps
             #  we want to have a history starting from the beginning of the game
@@ -286,6 +286,16 @@ class TrainableDT(DecisionTransformerModel):
         state_preds = self.predict_state(x[:, 2])  # predict next state given state and action
         action_preds = self.predict_action(x[:, 1])  # predict next action given state
 
+        sm = torch.nn.Softmax(dim=2)
+        action_preds = sm(action_preds)
+
+        action_targets = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        action_preds_l = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+
+        # we need to calculate the loss directly of the logits, otherwise information of the prediction is lost
+        nll_loss_fct = torch.nn.NLLLoss()
+        cross_ent_loss = nll_loss_fct(torch.log(action_preds_l), torch.argmax(action_targets, dim=1))
+
         # In the following, limiting behaviour is injected to set the rules of Skat.
         # This can be seen as a safety mechanism.
         # Masks are used to only allow legal actions.
@@ -308,9 +318,10 @@ class TrainableDT(DecisionTransformerModel):
 
         open_cards = states[:, :, 46:70]
         colour_trick = open_cards[:, :, :4]
+        # jack_lying = open_cards[:, :, 11]
 
         # If jack is first card, the trump_enc matters, not the suit of the jack
-        jack_played_as_first = open_cards[:, :, 12].reshape(32, 12, 1).bool()
+        jack_played_as_first = open_cards[:, :, 11].reshape(32, 12, 1).bool()
 
         # If jack is played at first, trump suit is the one of trick, else the suit of the first card
         # (batch, trick, colour)
@@ -334,12 +345,16 @@ class TrainableDT(DecisionTransformerModel):
 
         # ...and if trump is played, a jack:
         jack_on_hand = hand_cards[:, :, :, 11].bool()
-        trump_played = torch.any(colour_trick * trump_enc, dim=2)
+        trump_played = torch.any(colour_trick * trump_enc, dim=2) # + jack_lying
         jack_playable = jack_on_hand * trump_played.reshape(32, 12, 1)
 
         # Creates a mask: Does the lying suit exist on the hand?
         # If no colour is laying, mask is merged with actions in bounds
         is_colour_on_hand = torch.any(is_colour_on_hand, dim=3)
+
+        # Jacks also have a suit which can be falsely recognised by is_colour_on_hand
+        # -> get Jacks out of is_colour_on_hand:
+        is_colour_on_hand = is_colour_on_hand * (~jack_on_hand)
 
         # Playable cards to add to the trick, not to start it
         playable_cards_to_add = is_colour_on_hand + jack_playable.bool()
@@ -363,45 +378,47 @@ class TrainableDT(DecisionTransformerModel):
         # positions we want to attend and the dtype's smallest value for masked positions.
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
-        playable_cards = playable_cards.to(dtype=self.dtype)  # fp16 compatibility
-        playable_cards = (1.0 - playable_cards) * torch.finfo(self.dtype).min
+        # playable_cards = playable_cards.to(dtype=self.dtype)  # fp16 compatibility
+        # playable_cards = (1.0 - playable_cards) * torch.finfo(self.dtype).min
 
-        possible_action_preds = playable_cards + action_preds
+        possible_action_preds = playable_cards * action_preds
 
         # mask all actions were no card can be played, 1 if it can be played, 0 if not
         # e.g. in Hand games, as defenders in first two tricks (or side effect: due to the attention_mask)
         put_card_mask = states[:, :, 3].bool()
 
-        # combining the mask of
-        # the cards that can be played based on the colour and boundaries (playable_cards)
-        # with the mask of
-        # the permission to play a card; not allowed in Skat putting in Hand game or as defender (put_card_mask)
-        temp = playable_cards * put_card_mask.unsqueeze(1)
+        # starting from here until the loss fct, the loss is calculated
+        comb_mask = put_card_mask * attention_mask
 
         # for loss calculation: cut out action when player cannot play card
         # softmax guarantees to take one action -> only cutting the actions works
         possible_action_preds_clean = possible_action_preds.clone()
-        possible_action_preds_clean = possible_action_preds_clean[put_card_mask]
-        possible_action_targets = actions[put_card_mask]
+        possible_action_preds_clean = possible_action_preds_clean[comb_mask > 0]
 
-        # TODO: loss is inf, as True label differs to harshly from preds - faulty implementation or behaviour at start?
-        #  attention mask on mask and clean preds
+        # we have the possible action predictions and actions targets
+        # we want to compute a loss only over the predictions that are not 0 or minValue
+        # 1. derive mask from predictions to targets, if action is not within mask, the loss will be inf
+        # --> fault in preds
 
-        # attention_mask = attention_mask * put_card_mask
+        final_valid_action_idx = torch.nonzero(possible_action_preds_clean, as_tuple=True)
 
-        # action_preds_m = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        # action_targets_m = action_targets.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        valid_pred_actions = possible_action_preds_clean[final_valid_action_idx]
 
-        #
+        possible_action_targets = actions[comb_mask > 0]
+        valid_target_actions = possible_action_targets[final_valid_action_idx]
+
+        # cross entropy loss
+        # cross_ent_fct = nn.CrossEntropyLoss()
+        # cross_ent_loss = cross_ent_fct(valid_pred_actions, valid_target_actions)
+
         # sm = torch.nn.Softmax(dim=1)
         # action_preds_clean = sm(possible_action_preds_clean)
+
+        # action_preds_m = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        # action_targets_m = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
         #
         # nll_loss_fct = torch.nn.NLLLoss()
-        # cross_ent_loss = nll_loss_fct(torch.log(action_preds_clean), torch.argmax(possible_action_targets, dim=1))
-        #
-        # # cross entropy loss
-        cross_ent_fct = nn.CrossEntropyLoss()
-        cross_ent_loss = cross_ent_fct(possible_action_preds_clean, possible_action_targets)
+        # cross_ent_loss = nll_loss_fct(torch.log(action_preds_m), torch.argmax(action_targets_m, dim=1))
 
         # # only predicts the prob in context of 12 cards
         # soft_max = nn.Softmax(dim=2)
@@ -416,22 +433,38 @@ class TrainableDT(DecisionTransformerModel):
         # softmax has to be before the cross entropy loss
         # injected behaviour
         # action_preds = possible_action_preds[attention_mask > 0]
-        sm = torch.nn.Softmax(dim=2)
-        action_preds = sm(possible_action_preds)
+        # sm = torch.nn.Softmax(dim=2)
+        # action_preds = sm(action_preds)
 
-        action_targets = actions
-
+        # action_targets = actions
         # exclude actions that are not attended to
-        action_preds_m = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        action_targets_m = action_targets.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        # action_preds_m = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        # action_targets_m = action_targets.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
 
-        # TODO: output differs from the preds used in loss, maybe eliminate 0 actions?
-        # apply the loss
+        # apply mask whether a card should be played based on game timestep
+        action_preds = possible_action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
+
+        # action_preds_m = action_preds[attention_mask > 0]
+        # # get indices of non-zero elements, as they have been ruled out
+        # action_preds_idx = torch.nonzero(action_preds_m, as_tuple=True)
+        #
+        # # we have the actions and preds with the non-zero elements
+        # # we want an attn mask which only covers the non-zero elements
+        #
+        # actions_m = actions[attention_mask > 0]
+        #
+        # action_preds_m = action_preds_m[action_preds_idx]
+        # actions_m = actions_m[action_preds_idx]
+        #
         # nll_loss_fct = torch.nn.NLLLoss()
-        # cross_ent_loss = nll_loss_fct(torch.log(action_preds_m), torch.argmax(action_targets_m, dim=1))
+        # cross_ent_loss = nll_loss_fct(torch.log(action_preds_m), torch.argmax(actions_m, dim=0))
 
-        # apply mask whether a card should be played after softmax
-        action_preds = put_card_mask * action_preds
+        # action_loss_mask = attention_mask[action_preds_idx]
+        #
+        # actions_attended_loss = actions_l[action_loss_mask > 0]
+        #
+        # action_preds_l = action_preds[action_preds_idx]
+        # action_preds_attended_loss = action_preds_l[action_loss_mask > 0]
 
         if not return_dict:
             return state_preds, action_preds, return_preds
@@ -453,6 +486,7 @@ class TrainableDT(DecisionTransformerModel):
         action_targets = kwargs['actions']
         attention_mask = kwargs['attention_mask']
         action_targets = action_targets.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        action_preds = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
 
         # Cross-entropy loss is already calculated in original forward
         loss = output[-1]
@@ -472,11 +506,11 @@ class TrainableDT(DecisionTransformerModel):
 
         # exclude Skat putting for defenders and hand games
         # amount of actions - amount of actions that select a card
+        # unnecessary when showing rules
         amount_no_skat_action = action_targets.shape[0] - torch.sum(action_targets)
 
         # the accumulated probability of the correct action / total number of actions taken in targets
-        prob_correct_action = torch.sum(prob_each_act_correct) / (
-                action_targets.shape[0] - amount_no_skat_action)
+        prob_correct_action = torch.sum(prob_each_act_correct) / (action_targets.shape[0] - amount_no_skat_action)
 
         # we want to know to what probability the model actually chooses an action != target_action,
         # not the accumulated prob of (actions != target_action)
@@ -1143,11 +1177,12 @@ if __name__ == '__main__':
                         help='dataset of championship to select from. '
                              'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
                              ' contradictory.')
-    parser.add_argument('--games', type=int, default=(0, 10), nargs="+",
+    parser.add_argument('--games', type=int, default=(1, 2), nargs="+",
                         help='the games to load')
-    parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
-                        help='get the game from the perspective of these players. ',
-                        choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])
+    parser.add_argument('--perspective', type=int, default=(0, 1), nargs="+",
+                        help='get the game from the amount of perspectives.'
+                             'Note that the dataset will be split into test and train,',
+                        choices=[(0, 1, 2), (0, 1), 0])  # choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])
     parser.add_argument('--point_rewards', type=bool, default=True,
                         help='whether to add points of the game to the card points as a reward')
     parser.add_argument('--hand_encoding', '-enc', type=str, default='one-hot',
@@ -1163,7 +1198,7 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-3)
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_ratio', type=float, default=0.1)
-    parser.add_argument('--num_epochs', type=int, default=240)
+    parser.add_argument('--num_epochs', type=int, default=540)
     parser.add_argument('--use_cuda', type=bool, default=True)
     parser.add_argument('--save_model', type=bool, default=False,
                         help='Whether to save the model. '
