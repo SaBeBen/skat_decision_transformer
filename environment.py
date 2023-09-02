@@ -3,8 +3,7 @@ from typing import List
 import numpy as np
 
 import exceptions
-from card_representation_conversion import convert_numerical_to_card, convert_numerical_to_vector, convert_card_to_enc, \
-    convert_numerical_to_enc
+from card_representation_conversion import convert_numerical_to_card,  convert_card_to_enc, convert_numerical_to_enc
 
 from game.game import Game
 from game.game_state_machine import GameStateMachine
@@ -40,9 +39,9 @@ def get_dims_in_enc(encoding: str):
         raise NotImplementedError(f"The encoding {encoding} is not supported. Supported encodings are "
                                   f"'mixed', 'one-hot', 'mixed_comp' and one-hot_comp.")
 
-    # position co-player (3) + trump (4) + last trick (3 * card_dim)
-    # + open cards (2 * card_dim) + hand cards
-    state_dim = 3 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len
+    # position co-player (3) + put_card (1) + score (2) + trump (4) + last trick (3 * card_dim)
+    # + open cards (2 * card_dim) + padded hand cards (12 * card_dim)
+    state_dim = 3 + 1 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len
 
     return card_dim, max_hand_len, state_dim
 
@@ -646,8 +645,10 @@ class Env:
         # determine the position of players
         self.pos_p = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
 
-        self.last_trick = [0] * self.card_dim * 3
-        self.open_cards = [0] * self.card_dim * 2
+        self.last_trick, self.open_cards = [], []
+
+        last_trick = [0] * self.card_dim * 3
+        open_cards = [0] * self.card_dim * 2
 
         for current_player_id in range(3):
             if self.game.get_declarer().get_id() == current_player_id:
@@ -661,16 +662,18 @@ class Env:
                 self.pos_p[current_player_id][(current_player_id + 1) % 3] = 1
                 self.pos_p[current_player_id][(current_player_id + 2) % 3] = -1
 
-            game_state[current_player_id] = self.pos_p[current_player_id] + [0, 0] + self.trump_enc + self.last_trick \
-                                            + self.open_cards + get_hand_cards(self.game.players[current_player_id],
-                                                                               self.enc)
+            game_state[current_player_id] = self.pos_p[current_player_id] + [0, 0] + self.trump_enc + last_trick \
+                                            + open_cards \
+                                            + get_hand_cards(self.game.players[current_player_id], self.enc)
 
-        return game_state
+        return np.array(game_state)
 
-    def online_step(self, card_index):
+    def online_step(self, card_index, current_player_id):
+        current_player = self.game.players[current_player_id]
+
         # if the action is surrendering
         if card_index[0] == -2:
-            self.state_machine.handle_action(SurrenderAction(player=self.current_player))
+            self.state_machine.handle_action(SurrenderAction(player=current_player))
             reward = self.current_player.current_trick_points
             # pad the game state with 0s as a game-terminating signal
             game_state = [[0] * self.state_dim]  # * (12 - self.game.round)]
@@ -678,13 +681,15 @@ class Env:
             return game_state, reward, True
 
         # select the card on the players hand
-        card = self.current_player.cards[card_index.index(1)]
+        card = current_player.cards[card_index.index(1)]
 
         # the reward has to encode the winning player
         # default reward of 0
         reward = (0, 0)
 
-        open_cards = [0] * self.card_dim + [0] * self.card_dim
+        # TODO: wer kommt raus?
+
+        # TODO: AI limited to non hand games
 
         # the game is finished after 10 rounds
         done = (self.game.round == 10)
@@ -693,27 +698,28 @@ class Env:
         if self.skat_put[0]:
             reward = (self.game.get_declarer().id, self.put_skat(card))
             self.skat_put[0] = True
-
         elif self.skat_put[1]:
             reward = (self.game.get_declarer().id, self.put_skat(card))
             self.skat_put[1] = True
 
             self.state_machine.handle_action(
                 DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
+
+            self.open_cards, self.last_trick = [], []
         else:
-            self.state_machine.handle_action(PlayCardAction(player=self.current_player, card=card))
+            self.state_machine.handle_action(PlayCardAction(player=current_player, card=card))
 
-            self.open_cards.append(convert_card_to_enc(card, encoding=self.enc))
+            self.open_cards += convert_card_to_enc(card, encoding=self.enc)
 
-            self.last_trick.append(convert_card_to_enc(card, encoding=self.enc))
+            self.last_trick += convert_card_to_enc(card, encoding=self.enc)
 
         # end of trick
-        if len(self.open_cards) == 2:
+        if self.skat_put[1] and len(self.open_cards) == 10:
             # TODO: surrender
             # the reward has to be passed after each trick and is not necessarily for the current agent
             reward = (self.game.trick.leader.id, self.game.get_last_trick_points())
 
-            self.score[1] += self.game.get_last_trick_points() if self.current_player.current_trick_points == 0 else 0
+            self.score[1] += self.game.get_last_trick_points() if current_player.current_trick_points == 0 else 0
             self.score[0] += self.current_player.current_trick_points
             self.last_trick = self.open_cards + [card]
             self.open_cards = []
@@ -721,8 +727,17 @@ class Env:
         if done:
             reward = self.finish_game(reward)
 
-        game_state = self.pos_p + self.score + self.trump_enc + self.last_trick + self.open_cards + get_hand_cards(
-            self.current_player, self.enc)
+        # to show the declarer that he put the Skat in the last trick
+        if self.game.round == 1 and self.game.get_declarer().get_id() == current_player_id:
+            padded_last_trick = self.game.skat + 2 * [0] * self.card_dim
+            padded_open_cards = 3 * [0] * self.card_dim
+        else:
+            # padding without padding cards in environment
+            padded_last_trick = self.last_trick + [0] * (3 * self.card_dim - len(self.last_trick))
+            padded_open_cards = self.open_cards + [0] * (2 * self.card_dim - len(self.open_cards))
+
+        game_state = self.pos_p[current_player_id] + self.score + self.trump_enc + padded_last_trick \
+                     + padded_open_cards + get_hand_cards(current_player, self.enc)
 
         self.state = game_state
 
