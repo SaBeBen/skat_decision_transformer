@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # %%
 
 
-# IDs of the first 20 games
+# "IDGame" of the first 20 games, can be searched in https://skatarchiv.skat-spielen.de/ for a better view of the game
 # 8x619M13Bx36
 # 8x619M13BxQH
 # 8x619M13Bx3U
@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 # 8x619M13Bx9C
 # 8x619M13Bx9M
 
-"""The dataset of the sequence the cards (cs) were played follows"""
+"""The dataset of the card sequences (cs) follows"""
 
 championships = ["wc", "bl", "gc", "gtc", "rc"]
 
@@ -83,6 +83,7 @@ print(head)
 # %%
 
 """The table dataset follows"""
+
 table_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
                f"data/{championship}_table.CSV"
 
@@ -167,6 +168,8 @@ print(game_data["IDGame"].duplicated().any())
 
 # %%
 
+# Analysis
+
 game_data["Won"].value_counts(normalize=True)
 
 # %%
@@ -188,10 +191,6 @@ game_data["AllPassed"].value_counts(normalize=True)
 # %%
 
 game_data["Miscall"].value_counts(normalize=True)
-
-# %%
-
-game_data["Surrendered"].value_counts(normalize=True)
 
 # %%
 
@@ -222,13 +221,59 @@ game_data["Surrendered"].value_counts(normalize=True)
 cs_data["SurrenderedAt"].value_counts(normalize=True)
 
 # %%
-print(len(game_data))
+print(game_data.shape[0])
 
 # %%
-print(len(cs_data))
+print(cs_data.shape[0])
 
 # %%
-cs_and_game_data = game_data.join(cs_data, lsuffix='_caller', rsuffix='_other')
+cs_and_game_data = pd.merge(game_data, cs_data, how="inner", on="GameID")
+
+# %%
+
+surrendered = cs_and_game_data[(cs_and_game_data["SurrenderedAt"] > -1)]
+
+sur_and_null = cs_and_game_data[
+    (cs_and_game_data["SurrenderedAt"] > -1) &
+    ((cs_and_game_data["Game"] == 23) |
+     (cs_and_game_data["Game"] == 46) |
+     (cs_and_game_data["Game"] == 59) |
+     (cs_and_game_data["Game"] == 35))]
+
+sur_and_ouvert = cs_and_game_data[
+    (cs_and_game_data["SurrenderedAt"] > -1) &
+    (cs_and_game_data["Ouvert"] == 1)]
+
+game_variants_sur = cs_and_game_data[(cs_and_game_data["SurrenderedAt"] > -1)]["Game"].value_counts(normalize=True)
+game_variants_sur = game_variants_sur.rename(
+    index={24: "Grand", 12: "Cross", 11: "Spades", 10: "Hearts", 9: "Diamonds", 0: "AllPassed", 23: "Null",
+           46: "Null Ouvert", 59: "Null Ouvert Hand", 35: "Null Hand"})
+
+# %%
+
+game_level_sur_values = cs_and_game_data[(cs_and_game_data["SurrenderedAt"] > -1)].loc[:, "Hand":"Ouvert"]
+
+# the configurations of Hand, Schneider, SchneiderCalled, Schwarz, SchwarzCalled, Ouvert of surrendered Games
+# 0/0/0/0/0/0 means nothing was called
+game_level_sur_conf = game_level_sur_values.value_counts(normalize=True)
+
+# %%
+
+game_variants_sur.plot(kind="pie", y="Game", autopct='%1.0f%%')
+plt.ylabel("Surrendered Games")
+
+plt.savefig(f"graphics/sur_games_pie_{championship}.png")
+plt.show()
+
+# %%
+amount_sur = surrendered.shape[0]
+
+amount_sur_and_null = sur_and_null.shape[0]
+
+amount_sur_and_ouvert = sur_and_ouvert.shape[0]
+
+ratio_surrendered_null = amount_sur - amount_sur_and_null
+
 # %%
 
 # Filter the games that were won
@@ -274,25 +319,7 @@ game_variants_won = game_variants_won.drop(labels=["Null Ouvert", "Null Hand", "
 
 # Create a pie plot showing the relative occurrence of game variants in won games
 game_variants_won.plot(kind="pie", y="Game", autopct='%1.0f%%')
+
+plt.ylabel("Won Games")
 plt.savefig(f"graphics/won_games_pie_{championship}.png")
 plt.show()
-
-# %%
-
-# Data Cleansing
-
-# %%
-
-# Drop irrelevant information
-games_clean = game_data.drop(["IDVServer", "StartTime", "EndTime"], axis=1)
-
-# %%
-games_clean.info(memory_usage="deep")
-
-games_clean.select_dtypes(include=['int'])
-
-# %%
-# Optimizing memory space by casting to unsigned ints
-games_clean.iloc[:, 3:] = games_clean.iloc[:, 3:].apply(pd.to_numeric, downcast="unsigned")
-
-games_clean.info(memory_usage="deep")

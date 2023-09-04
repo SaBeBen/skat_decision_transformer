@@ -11,7 +11,7 @@ import random
 # import resource
 import time
 from dataclasses import dataclass
-from typing import Dict, Union, Tuple, Optional, List, Any
+from typing import Dict, Union, Optional, List, Any
 
 import numpy as np
 import pandas as pd
@@ -24,7 +24,6 @@ from sklearn.model_selection import train_test_split
 
 from transformers import DecisionTransformerModel, TrainingArguments, Trainer, DecisionTransformerConfig
 
-from transformers.models.decision_transformer.modeling_decision_transformer import DecisionTransformerOutput
 from transformers.trainer_utils import speed_metrics, IntervalStrategy
 from transformers.utils import ModelOutput
 
@@ -68,26 +67,12 @@ class DecisionTransformerSkatDataCollator:
             states.extend(obs)
             traj_lens.append(len(obs))
         self.n_traj = len(traj_lens)
+
         states = np.vstack(states)
         self.state_mean, self.state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
 
         traj_lens = np.array(traj_lens)
         self.p_sample = traj_lens / sum(traj_lens)
-
-    def get_batch_ind(self):
-        # batch_size = len(features)
-        # the batch size is per_device_train_batch_size*num_of_gpu, and the collator
-        # makes batches of batch_size every dataset_size//batch_size times,
-        # with the batch size being dataset_size%batch_size at the last call, just for the remaining data
-
-        # this is a bit of a hack to be able to sample of a non-uniform distribution
-        # we have a random pick of the data as a batch without controlling the shape,
-        return np.random.choice(
-            np.arange(self.n_traj),
-            size=self.batch_size,
-            replace=True,
-            p=self.p_sample,  # reweights, so we sample according to timesteps
-        )
 
     def _discount_cumsum(self, x, gamma):
         # weighted rewards are in the data set (get_states_actions_rewards)
@@ -99,21 +84,34 @@ class DecisionTransformerSkatDataCollator:
         return discount_cumsum
 
     def __call__(self, features):
-        batch_inds = self.get_batch_ind()
+        # batch_inds = self.get_batch_ind()
+
+        # features are already batched, but
+        # we always want to put out batches of batch_size, len(features) can be < batch_size, then either we have issues
+        # in forward or if we drop smaller batches, we can not train under 32 games (for overfitting)
+
+        # this is a bit of a hack to be able to sample of a non-uniform distribution
+        # we have a random pick of the data as a batch without controlling the shape
+        batch_inds = np.random.choice(
+            np.arange(len(features)),
+            size=self.batch_size,
+            replace=True,
+            p=[1/len(features)]*len(features)
+        )
 
         # a batch of dataset features
         s, a, r, rtg, timesteps, mask, big_action_mask = [], [], [], [], [], [], []
 
         for ind in batch_inds:
 
-            # feature = features[int(ind)]
-            feature = self.dataset[int(ind)]
+            feature = features[int(ind)]
+            # feature = self.dataset[int(ind)]
 
             # why do we use a randint?
             # To be able to jump into one game -> predict from every position and improve training
             # jumping randomly into a surrendered game could not work well
             # ->  We encode whether card should be played in states (see data_pipeline)
-            si = len(feature["rewards"])  # random.randint(1, len(feature["rewards"]))
+            si = random.randint(1, len(feature["rewards"]))
 
             #  fixed frame of 12 timesteps
             #  we want to have a history starting from the beginning of the game
@@ -286,6 +284,10 @@ class TrainableDT(DecisionTransformerModel):
         state_preds = self.predict_state(x[:, 2])  # predict next state given state and action
         action_preds = self.predict_action(x[:, 1])  # predict next action given state
 
+        # induces wrong behaviour for the prediction
+        put_card_mask = states[:, :, 3].bool()
+        # action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
+
         sm = torch.nn.Softmax(dim=2)
         action_preds = sm(action_preds)
 
@@ -311,8 +313,6 @@ class TrainableDT(DecisionTransformerModel):
         # If (open suit is on hand) or (trump is played and are jacks on hand)?
         # If yes -> valid actions are all cards with same suit or jacks when trump is lying
         # If not -> valid actions are all cards on the hand (called "in bounds")
-
-        last_states = states[:, -1, :]
 
         trump_enc = states[:, :, 6:10]
 
@@ -345,7 +345,7 @@ class TrainableDT(DecisionTransformerModel):
 
         # ...and if trump is played, a jack:
         jack_on_hand = hand_cards[:, :, :, 11].bool()
-        trump_played = torch.any(colour_trick * trump_enc, dim=2) # + jack_lying
+        trump_played = torch.any(colour_trick * trump_enc, dim=2)  # + jack_lying
         jack_playable = jack_on_hand * trump_played.reshape(32, 12, 1)
 
         # Creates a mask: Does the lying suit exist on the hand?
@@ -395,11 +395,6 @@ class TrainableDT(DecisionTransformerModel):
         possible_action_preds_clean = possible_action_preds.clone()
         possible_action_preds_clean = possible_action_preds_clean[comb_mask > 0]
 
-        # we have the possible action predictions and actions targets
-        # we want to compute a loss only over the predictions that are not 0 or minValue
-        # 1. derive mask from predictions to targets, if action is not within mask, the loss will be inf
-        # --> fault in preds
-
         final_valid_action_idx = torch.nonzero(possible_action_preds_clean, as_tuple=True)
 
         valid_pred_actions = possible_action_preds_clean[final_valid_action_idx]
@@ -407,39 +402,7 @@ class TrainableDT(DecisionTransformerModel):
         possible_action_targets = actions[comb_mask > 0]
         valid_target_actions = possible_action_targets[final_valid_action_idx]
 
-        # cross entropy loss
-        # cross_ent_fct = nn.CrossEntropyLoss()
-        # cross_ent_loss = cross_ent_fct(valid_pred_actions, valid_target_actions)
-
-        # sm = torch.nn.Softmax(dim=1)
-        # action_preds_clean = sm(possible_action_preds_clean)
-
-        # action_preds_m = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        # action_targets_m = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        #
-        # nll_loss_fct = torch.nn.NLLLoss()
-        # cross_ent_loss = nll_loss_fct(torch.log(action_preds_m), torch.argmax(action_targets_m, dim=1))
-
-        # # only predicts the prob in context of 12 cards
-        # soft_max = nn.Softmax(dim=2)
-        # action_pred_sm = soft_max(action_preds)
-        #
-        # action_taken = torch.argmax(action_pred_sm, dim=1)
-        #
-        # actions_oob = torch.nonzero(torch.div(action_taken, hand_card_length, rounding_mode='trunc'))
-        # # predictions have to be passed as tensors
-        # rate_oob_actions = Tensor([actions_oob.shape[0] / actions.shape[0]])
-
         # softmax has to be before the cross entropy loss
-        # injected behaviour
-        # action_preds = possible_action_preds[attention_mask > 0]
-        # sm = torch.nn.Softmax(dim=2)
-        # action_preds = sm(action_preds)
-
-        # action_targets = actions
-        # exclude actions that are not attended to
-        # action_preds_m = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        # action_targets_m = action_targets.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
 
         # apply mask whether a card should be played based on game timestep
         action_preds = possible_action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
@@ -466,6 +429,7 @@ class TrainableDT(DecisionTransformerModel):
         # action_preds_l = action_preds[action_preds_idx]
         # action_preds_attended_loss = action_preds_l[action_loss_mask > 0]
 
+        # for evaluation and online training
         if not return_dict:
             return state_preds, action_preds, return_preds
 
@@ -686,6 +650,7 @@ def run_training(args):
     use_cuda = args['use_cuda']
     save_model = args['save_model']
     pretrained_model_path = args['pretrained_model']
+    eval_in_training = args['eval_in_training']
 
     if torch.cuda.is_available() and use_cuda:
         device = torch.device('cuda')
@@ -771,6 +736,7 @@ def run_training(args):
         remove_unused_columns=False,
         num_train_epochs=num_train_epochs,
         per_device_train_batch_size=32,
+        per_device_eval_batch_size=32,
         learning_rate=l_rate,
         weight_decay=weight_decay,
         warmup_ratio=warmup_ratio,
@@ -778,12 +744,15 @@ def run_training(args):
         max_grad_norm=0.1,
         logging_steps=logging_steps,
         logging_dir=logging_dir,
-        # bf16=True,
+        # dataloader_drop_last=True,  # drop incomplete batches, prevents training of less than batch_size games
+    # bf16=True,
         save_steps=5000
-        # do_eval=True,
-        # evaluation_strategy="steps",
-        # eval_steps=100,
     )
+
+    if eval_in_training:
+        training_args.do_eval = True,
+        training_args.evaluation_strategy = "steps"
+        training_args.eval_steps = 100
 
     trainer = DTTrainer(  # CustomDTTrainer
         model=model,
@@ -795,7 +764,7 @@ def run_training(args):
         # callbacks=[tensorboard_callback]  # here or in "report_to" of args
     )
 
-    print(f"\nTraining with {hand_encoding} encoding...")
+    print(f"\nTraining on games {games_to_load.start, games_to_load.stop} with {hand_encoding} encoding...")
     trainer.train()
 
     # for tensorboard visualization:
@@ -1177,9 +1146,9 @@ if __name__ == '__main__':
                         help='dataset of championship to select from. '
                              'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
                              ' contradictory.')
-    parser.add_argument('--games', type=int, default=(1, 2), nargs="+",
+    parser.add_argument('--games', type=int, default=(0, 100), nargs="+",
                         help='the games to load')
-    parser.add_argument('--perspective', type=int, default=(0, 1), nargs="+",
+    parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
                         help='get the game from the amount of perspectives.'
                              'Note that the dataset will be split into test and train,',
                         choices=[(0, 1, 2), (0, 1), 0])  # choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])
@@ -1198,7 +1167,7 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-3)
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_ratio', type=float, default=0.1)
-    parser.add_argument('--num_epochs', type=int, default=540)
+    parser.add_argument('--num_epochs', type=int, default=240)
     parser.add_argument('--use_cuda', type=bool, default=True)
     parser.add_argument('--save_model', type=bool, default=False,
                         help='Whether to save the model. '
@@ -1207,6 +1176,9 @@ if __name__ == '__main__':
     parser.add_argument('--pretrained_model', type=model_file, default=None,
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
+    parser.add_argument('--eval_in_training', type=bool, default=True,
+                        help="Whether to evaluate during training. Slows down training if activated."
+                             "Evaluation takes place on the test portion of the dataset (#_games_to_load * 0.2).")
 
     args = parser.parse_args()
 

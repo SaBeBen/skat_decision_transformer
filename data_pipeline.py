@@ -1,7 +1,6 @@
 import copy
-from math import floor
+from math import ceil
 
-# import resource
 import numpy as np
 import pandas as pd
 from datasets import DatasetDict, Dataset
@@ -73,16 +72,12 @@ def get_game(game="wc", games_indices=slice(0, -1)):
                                     & (skat_game_data["Game"] != 46)
                                     & (skat_game_data["Game"] != 59)]
 
-    skat_cs_data = skat_cs_data[skat_cs_data["SurrenderedAt"] == -1]
+    skat_cs_data = skat_cs_data[skat_cs_data["SurrenderedAt"] <= -1]
 
     # get rid of certain games by merging
     merged_game = pd.merge(skat_game_data, skat_cs_data, how="inner", on="GameID")
 
     merged_game = merged_game.iloc[games_indices]
-
-    # if game == 'gc':
-    #     merged_game = merged_game.drop(merged_game[(merged_game["GameID"] == 167545)
-    #                                                | (merged_game["GameID"] == 167546)].index)
 
     skat_game_data = merged_game.loc[:, :"Surrendered"]
 
@@ -199,7 +194,12 @@ def get_states_actions_rewards(
             trump_enc = get_trump_enc(trump)
 
             # if a game was surrendered, the amount of tricks played before surrender is stored in surrendered trick
-            surrendered_trick = floor(skat_and_cs[cs_index, -1] / 3)
+            #
+            surrendered_card = skat_and_cs[cs_index, -1]
+            if surrendered_card > -1:
+                surrendered_trick = ceil(surrendered_card / 3)
+            else:
+                surrendered_trick = surrendered_card
 
             # skip start of the game (shuffling and dealing)
             env.state_machine.state_finished_handler()
@@ -533,11 +533,12 @@ def get_states_actions_rewards(
                         game_state, actions, rewards = \
                             surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
                                       state_dim)
+                        # TODO: can be surrendered in the middle of the trick
                         break
                     else:
                         rewards.append(current_player.current_trick_points)
 
-                        if trick == 1 and not hand:
+                        if trick == 1 and not hand and current_player.type == Player.Type.DECLARER:
                             rewards[-1] += skat1.get_value() + skat2.get_value()
 
                 # if hand is played, adding the Skat points in the end of the game simulates not knowing them
@@ -559,12 +560,12 @@ def get_states_actions_rewards(
                 # if point_rewards add card points on top of achieved points...
                 # soloist points can be negative if she lost
                 if current_player.type == Player.Type.DECLARER:
-                    # TODO: can be adjusted to closer match the Fabian-Seeger score, necessary for online training
+                    # TODO: can be adjusted to closer match the Fabian-Seeger score, later necessary for online training
                     # add the points to the soloist
                     rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
-                # else:
-                    # subtract the game points
-                    # rewards[-1] = -0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
+                elif env.game.has_declarer_won():
+                    # give 40 discounted score points to the defenders after Fabian-Seeger score
+                    rewards[-1] = 0.9 * 40 + rewards[-1] * 0.1  # rewards[-1] + soloist_points
             else:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games
                 rewards[-1] *= 1  # (1 if won else 0)
@@ -601,7 +602,7 @@ if __name__ == '__main__':
 
     championship = "wc"
 
-    card_encodings = ["one-hot_comp",  "mixed"]
+    card_encodings = ["one-hot"] #, "mixed_comp", "one-hot_comp", "mixed"]
     # for championship in POSSIBLE_CHAMPIONSHIPS:
     # point_rewards = True
     print(f"Reading in championship {championship}...")
@@ -625,4 +626,4 @@ if __name__ == '__main__':
 
             dataset = DatasetDict({"train": Dataset.from_dict(data_train),
                                    "test": Dataset.from_dict(data_test)})
-            dataset.save_to_disk(f"./datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}")
+            dataset.save_to_disk(f"./datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-card_put")
