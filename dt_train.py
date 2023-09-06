@@ -97,7 +97,7 @@ class DecisionTransformerSkatDataCollator:
             np.arange(len(features)),
             size=self.batch_size,
             replace=True,
-            p=[1/len(features)]*len(features)
+            p=[1 / len(features)] * len(features)
         )
 
         # a batch of dataset features
@@ -285,7 +285,6 @@ class TrainableDT(DecisionTransformerModel):
         state_preds = self.predict_state(x[:, 2])  # predict next state given state and action
         action_preds = self.predict_action(x[:, 1])  # predict next action given state
 
-        # induces wrong behaviour for the prediction
         put_card_mask = states[:, :, 3].bool()
         action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
 
@@ -376,7 +375,8 @@ class TrainableDT(DecisionTransformerModel):
         hand_card_length = torch.sub(12, timesteps).to(self.device)
 
         # Mask is all cards excluding OOB actions
-        actions_in_bounds = torch.arange(12).repeat(batch_size, 12).reshape(batch_size, 12, 12) < hand_card_length.view(-1, 12, 1)
+        actions_in_bounds = torch.arange(12).repeat(batch_size, 12).reshape(batch_size, 12, 12).to(
+            self.device) < hand_card_length.view(-1, 12, 1).to(self.device)
 
         merging_mask = (~playable_cards_to_add).all(dim=2).to(self.device)
 
@@ -758,7 +758,7 @@ def run_training(args):
         logging_steps=logging_steps,
         logging_dir=logging_dir,
         # dataloader_drop_last=True,  # drop incomplete batches, prevents training of less than batch_size games
-    # bf16=True,
+        # bf16=True,
         save_steps=5000
     )
 
@@ -794,8 +794,8 @@ def run_training(args):
     # pretrained_model = TrainableDT.from_pretrained("./pretrained_models")
     # trainer.model = pretrained_model
 
-    if save_model:
-        model.save_pretrained(rf"./pretrained_models/{dir_name}")
+    # if save_model:
+    #     model.save_pretrained(rf"./pretrained_models/{dir_name}")
 
     training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
 
@@ -804,19 +804,6 @@ def run_training(args):
     evaluation_results = trainer.evaluate()
 
     print(evaluation_results)
-
-    # pretrained_model = TrainableDT.from_pretrained(
-    #     f"./pretrained_models/games_0-50000-encoding_one-hot-point_rewards_True-Mon_Sep__4_23-48-24_2023")
-    #
-    # pretrained_model.config.state_dim = state_dim
-    # # pretrained_model.config.act_dim =
-    #
-    # train_online_dt(pretrained_model,
-    #                 point_reward=point_rewards,
-    #                 state_dim=state_dim,
-    #                 card_enc=hand_encoding,
-    #                 amount_games=10
-    #                 )
 
     # first_states = dataset['test']['states'][]
     # if games_to_load.stop != -1:
@@ -1011,16 +998,36 @@ def evaluate_in_env(model,
 #  stated in ausschreibung: Idea of 3 models learning the game through self-play after learning it from expert data
 #  alternative: see Online DT Algorithm 1 and 2 (see above for idea)
 
+def run_online_dt(args):
+    # game specific arguments
+    championship = args['championship']
+    hand_encoding = args['hand_encoding']
+    point_rewards = args['point_rewards']
+
+    card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
+    pretrained_model = TrainableDT.from_pretrained(
+        f"./pretrained_models/games_0-50000-encoding_one-hot-point_rewards_True-Mon_Sep__4_23-48-24_2023")
+
+    pretrained_model.config.state_dim = state_dim
+
+    train_online_dt(pretrained_model,
+                    point_reward=point_rewards,
+                    state_dim=state_dim,
+                    card_enc=hand_encoding,
+                    amount_games=10
+                    )
+
+
 def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
     scale = 1
 
     # env = environment.Env() if one_game is None else one_game
-    env = Env(card_enc)
 
     # initialise s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
 
     for games in tqdm(range(amount_games)):
+        env = Env(card_enc)
         # TODO: rotate players after game
 
         # build the environment for the evaluation
@@ -1070,6 +1077,8 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
             rewards = torch.cat([rewards, torch.zeros(3, 1)], dim=1)
 
             cur_state = torch.zeros(0, state_dim).float()
+
+            cur_state = np.array([[0] * state_dim] * 3)
             cur_pred_return = torch.zeros(0, 1).float()
 
             for i in range(3):
@@ -1077,57 +1086,119 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
                 # note that there is no order of playing cards during Skat putting in the game, as only the declarer
                 # takes actions
                 # after the first trick, the order of playing can change depending on the last tricks winner
-                if t <= 2:
+
+                # skat putting
+                if t < 2:
                     current_player = i
+                    if current_player == env.game.get_declarer().get_id():
+                        action_pred = get_action(model,
+                                                 states[current_player],
+                                                 actions[current_player],
+                                                 rewards[current_player],
+                                                 target_return[current_player],
+                                                 timesteps)
+                        # action_pred are already soft-maxed and valid actions,
+                        # we only need to prevent the argmax from choosing an all 0 action
 
-                states[current_player, -1] = env.update_state(states[current_player, -1])
-                # rewards[current_player] = torch.cat([rewards[current_player], torch.zeros(1)], dim=0)
-                # predicting the action to take
-                action_pred = get_action(model,
-                                         states[current_player],
-                                         actions[current_player],
-                                         rewards[current_player],
-                                         target_return[current_player],
-                                         timesteps)
+                        actions_pred_eval[current_player][-1] = action_pred
 
-                # action_pred are already soft-maxed and valid actions,
-                # we only need to prevent the argmax from choosing an all 0 action
+                        # print(f"Action {t}: {action_pred}")
 
-                actions_pred_eval[current_player][-1] = action_pred
+                        action = action_pred.detach().numpy()
 
-                # print(f"Action {t}: {action_pred}")
+                        if torch.sum(action_pred) != 0:
+                            # get the index of the card with the highest probability
+                            card_index = np.argmax(action)
 
-                action = action_pred.detach().numpy()
+                            # only select the best card
+                            action[:] = 0
+                            action[card_index] = 1
+                        else:
+                            card_index = -1
 
-                if torch.sum(action_pred) != 0:
-                    # get the index of the card with the highest probability
-                    card_index = np.argmax(action)
+                        actions[current_player][-1] = Tensor(action)
 
-                    # only select the best card
-                    action[:] = 0
-                    action[card_index] = 1
+                        # interact with the environment based on this action
+                        # reward_player is a tuple of the trick winner and reward to propagate it
+                        state, reward_player, done, _ = env.online_step(card_index, current_player)
+
+                        cur_state[i] = state
+
+                    else:
+                        state = states[current_player, -1]
+                        reward_player = [current_player, 0]
+
+                        action_pred = get_action(model,
+                                                 states[current_player],
+                                                 actions[current_player],
+                                                 rewards[current_player],
+                                                 target_return[current_player],
+                                                 timesteps)
+                        actions_pred_eval[current_player][-1] = action_pred
+
+                        actions[current_player][-1] = Tensor([0] * 12)
+
+                        # allow to play a card after Skat putting
+                        if t == 1:
+                            state[3] = 1
+
+                        # cur_state = torch.cat([cur_state, state.reshape(1, state_dim)])
+                        cur_state[current_player] = state
+
                 else:
-                    card_index = -1
+                    # start at the first seat, at the player besides the dealer
+                    if (t == 2) and (i == 0):
+                        current_player = env.game.get_first_seat().id
 
-                actions[current_player][-1] = Tensor(action)
+                    # update the state of the current player to get the open cards
+                    states[current_player, -1] = env.update_state(states[current_player, -1])
 
-                # interact with the environment based on this action
-                # reward_player is a tuple of the trick winner and her reward,
-                # else there are difficulties with reward assignment
-                state, reward_player, done, current_player = env.online_step(card_index, current_player)
+                    # predicting the action to take
+                    action_pred = get_action(model,
+                                             states[current_player],
+                                             actions[current_player],
+                                             rewards[current_player],
+                                             target_return[current_player],
+                                             timesteps)
 
-                # print(f"Reward {t}: {reward}")
+                    actions_pred_eval[current_player][-1] = action_pred
 
-                cur_state = torch.cat([cur_state, torch.from_numpy(state).reshape(1, state_dim)])
+                    action = action_pred.detach().numpy()
+
+                    # action_pred are already soft-maxed and valid actions,
+                    # we only need to prevent the argmax from choosing an all 0 action
+                    if torch.sum(action_pred) != 0:
+                        # get the index of the card with the highest probability
+                        card_index = np.argmax(action)
+
+                        # only select the best card
+                        action[:] = 0
+                        action[card_index] = 1
+                    else:
+                        card_index = -1
+
+                    actions[current_player][-1] = Tensor(action)
+
+                    acting_player = current_player
+
+                    # interact with the environment based on this action
+                    # reward_player is a tuple of the trick winner and reward to propagate it
+                    # current_player is used to correctly iterate over the states in the order of play
+                    state, reward_player, done, current_player = env.online_step(card_index, current_player)
+
+                    # cur_state = torch.cat([cur_state, torch.from_numpy(state).reshape(1, state_dim)])
+                    cur_state[acting_player] = state
 
                 # states[current_player] = torch.cat([states[current_player], cur_state], dim=0)
                 rewards[reward_player[0]][-1] = reward_player[1]
 
-                pred_return = target_return[current_player, -1] - (rewards[reward_player[0]][-1] / scale)
+                pred_return = target_return[reward_player[0], -1] - (rewards[reward_player[0]][-1] / scale)
                 cur_pred_return = torch.cat([cur_pred_return, pred_return.reshape(1, 1)])
 
+            # update all states after each trick for the hand cards, score and last_trick
             target_return = torch.cat([target_return, cur_pred_return], dim=1)
-            states = torch.cat([states, cur_state.unsqueeze(1)], dim=1)
+            cur_state = torch.from_numpy(cur_state).reshape(3, 1, state_dim)
+            states = torch.cat([states, cur_state], dim=1)
             timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
 
             # TODO: loss and backward propagation
@@ -1170,9 +1241,9 @@ if __name__ == '__main__':
                         help='dataset of championship to select from. '
                              'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
                              ' contradictory.')
-    parser.add_argument('--games', type=int, default=(1, 2), nargs="+",
+    parser.add_argument('--games', type=int, default=(0, 10), nargs="+",
                         help='the games to load')
-    parser.add_argument('--perspective', type=int, default=(0), nargs="+",
+    parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
                         help='get the game from the amount of perspectives.'
                              'Note that the dataset will be split into test and train,',
                         choices=[(0, 1, 2), (0, 1), 0])  # choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])
@@ -1203,7 +1274,12 @@ if __name__ == '__main__':
     parser.add_argument('--eval_in_training', type=bool, default=True,
                         help="Whether to evaluate during training. Slows down training if activated."
                              "Evaluation takes place on the test portion of the dataset (#_games_to_load * 0.2).")
+    parser.add_argument('--online_eval', type=bool, default=False,
+                        help="Uses a pre-trained model to play online against itself.")
 
-    args = parser.parse_args()
+    args = vars(parser.parse_args())
 
-    run_training(vars(args))
+    if args['online_eval']:
+        run_online_dt(args)
+    else:
+        run_training(args)

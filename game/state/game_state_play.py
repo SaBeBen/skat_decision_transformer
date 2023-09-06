@@ -42,7 +42,7 @@ class GameStatePlay(GameState):
             raise InvalidPlayerMove("Player " + player.name + " already played a card to the trick.")
         # check if this is players turn or waiting for another player to play his card before
         if not self.game.trick.can_move(player):
-            raise InvalidPlayerMove("It's not players " + player.name + " move.")
+            raise InvalidPlayerMove("It's not player " + player.name + "s move.")
         # check if player can play this card (see follow)
         # TODO rule that player lost for playing wrong card?
         if not self.game.trick.is_valid_card_move(self.game.game_variant, player, card):

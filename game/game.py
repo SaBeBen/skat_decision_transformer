@@ -31,16 +31,14 @@ class Game:
             trick_winner.current_trick_points = current_trick_points
             for player in self.players:
                 if player is not trick_winner:
-                    # both players of the counterparty receive a negative reward
-                    player.current_trick_points = 0  # -current_trick_points
+                    player.current_trick_points = 0
         else:
             for player in self.players:
                 if player is not self.get_declarer():
                     # both players of the counterparty receive the reward
                     player.current_trick_points = current_trick_points
                 else:
-                    # the declarer receives a negative reward
-                    player.current_trick_points = 0  # -current_trick_points
+                    player.current_trick_points = 0
 
         # add trick to players trick_stack
         trick_winner.trick_stack[self.round] = self.trick.stack
