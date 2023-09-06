@@ -11,11 +11,12 @@ import random
 # import resource
 import time
 from dataclasses import dataclass
-from typing import Dict, Union, Optional, List, Any
+from typing import Dict, Union, Optional, List, Any, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
+from tqdm import tqdm
 
 from datasets import Dataset, DatasetDict, load_from_disk
 from torch import nn
@@ -223,7 +224,7 @@ class TrainableDT(DecisionTransformerModel):
             output_hidden_states=None,
             output_attentions=None,
             return_dict=None,
-    ) -> Union[tuple[Any, Any, Any], CustomDecisionTransformerOutput]:
+    ) -> Union[Tuple, CustomDecisionTransformerOutput]:
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -286,17 +287,28 @@ class TrainableDT(DecisionTransformerModel):
 
         # induces wrong behaviour for the prediction
         put_card_mask = states[:, :, 3].bool()
-        # action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
+        action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
 
         sm = torch.nn.Softmax(dim=2)
         action_preds = sm(action_preds)
 
-        action_targets = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        action_preds_l = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        action_targets_masked = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        action_preds_masked = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        # action_preds_l = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
 
-        # we need to calculate the loss directly of the logits, otherwise information of the prediction is lost
+        # cross_ent_loss = nll_loss_fct(torch.log(action_preds_l), torch.argmax(action_targets, dim=1))
+
+        # when argmax takes 0 actions it selects the first element as maximum -> there is no 1 -> inf loss
+        # --> as the loss only looks at the ground truth and we mask 0 actions, we throw out the 0 actions for the loss
+        mask_wo_zeros = action_targets_masked.sum(dim=1)
+        mask_wo_zeros = mask_wo_zeros > 0
+
+        targets_wo_zeros = action_targets_masked[mask_wo_zeros]
+        preds_wo_zeros = action_preds_masked[mask_wo_zeros]
+
         nll_loss_fct = torch.nn.NLLLoss()
-        cross_ent_loss = nll_loss_fct(torch.log(action_preds_l), torch.argmax(action_targets, dim=1))
+        loss_pure = nll_loss_fct(torch.log(preds_wo_zeros), torch.argmax(targets_wo_zeros, dim=1))
+        loss = loss_pure
 
         # In the following, limiting behaviour is injected to set the rules of Skat.
         # This can be seen as a safety mechanism.
@@ -314,6 +326,7 @@ class TrainableDT(DecisionTransformerModel):
         # If yes -> valid actions are all cards with same suit or jacks when trump is lying
         # If not -> valid actions are all cards on the hand (called "in bounds")
 
+        # if states.shape[0] == batch_size:
         trump_enc = states[:, :, 6:10]
 
         open_cards = states[:, :, 46:70]
@@ -321,7 +334,7 @@ class TrainableDT(DecisionTransformerModel):
         # jack_lying = open_cards[:, :, 11]
 
         # If jack is first card, the trump_enc matters, not the suit of the jack
-        jack_played_as_first = open_cards[:, :, 11].reshape(32, 12, 1).bool()
+        jack_played_as_first = open_cards[:, :, 11].reshape(batch_size, 12, 1).bool().to(self.device)
 
         # If jack is played at first, trump suit is the one of trick, else the suit of the first card
         # (batch, trick, colour)
@@ -329,7 +342,7 @@ class TrainableDT(DecisionTransformerModel):
 
         # If colour does not exist on hand, it is padded with 0s
         # -> we can find out if suit is on hand by looking in state at fixed indices
-        hand_cards = states[:, :, -144:].reshape(batch_size, 12, 12, 12)
+        hand_cards = states[:, :, -144:].reshape(batch_size, 12, 12, 12).to(self.device)
         # (batch, trick, hand in trick, cards) -> each card is reduced to its suit/colour
         colours_on_hands = hand_cards[:, :, :, :4]
 
@@ -338,19 +351,19 @@ class TrainableDT(DecisionTransformerModel):
         # the hand (sequence of colours can have a variable length)
         # the 12 repeated entries are a mask over the cards in each trick
         # (batch, trick, suit) -> (batch, trick, suit_in_trick * 12, suit)
-        trick_mask = colour_trick.unsqueeze(2).repeat(1, 1, 12, 1)
+        trick_mask = colour_trick.unsqueeze(2).repeat(1, 1, 12, 1).to(self.device)
 
         # Finally, find out if suit is on hand...
         is_colour_on_hand = trick_mask * colours_on_hands
 
         # ...and if trump is played, a jack:
         jack_on_hand = hand_cards[:, :, :, 11].bool()
-        trump_played = torch.any(colour_trick * trump_enc, dim=2)  # + jack_lying
-        jack_playable = jack_on_hand * trump_played.reshape(32, 12, 1)
+        trump_played = torch.any(colour_trick * trump_enc, dim=2).to(self.device)  # + jack_lying
+        jack_playable = jack_on_hand * trump_played.reshape(batch_size, 12, 1).to(self.device)
 
         # Creates a mask: Does the lying suit exist on the hand?
         # If no colour is laying, mask is merged with actions in bounds
-        is_colour_on_hand = torch.any(is_colour_on_hand, dim=3)
+        is_colour_on_hand = torch.any(is_colour_on_hand, dim=3).to(self.device)
 
         # Jacks also have a suit which can be falsely recognised by is_colour_on_hand
         # -> get Jacks out of is_colour_on_hand:
@@ -360,16 +373,16 @@ class TrainableDT(DecisionTransformerModel):
         playable_cards_to_add = is_colour_on_hand + jack_playable.bool()
 
         # If colour is not on hand: mask is all cards excluding actions not on hand (OOB)
-        hand_card_length = torch.sub(12, timesteps)
+        hand_card_length = torch.sub(12, timesteps).to(self.device)
 
         # Mask is all cards excluding OOB actions
-        actions_in_bounds = torch.arange(12).repeat(32, 12).reshape(32, 12, 12) < hand_card_length.view(-1, 12, 1)
+        actions_in_bounds = torch.arange(12).repeat(batch_size, 12).reshape(batch_size, 12, 12) < hand_card_length.view(-1, 12, 1)
 
-        merging_mask = (~playable_cards_to_add).all(dim=2)
+        merging_mask = (~playable_cards_to_add).all(dim=2).to(self.device)
 
         # If no card is lying, action_in_bounds is valid
         # If at least one card is lying, playable_cards_to_add acknowledges the suit
-        playable_cards = playable_cards_to_add.clone()
+        playable_cards = playable_cards_to_add.clone().to(self.device)
         playable_cards[merging_mask] = actions_in_bounds[merging_mask]
 
         # From modeling_decision_transformer.py (HF):
@@ -385,22 +398,22 @@ class TrainableDT(DecisionTransformerModel):
 
         # mask all actions were no card can be played, 1 if it can be played, 0 if not
         # e.g. in Hand games, as defenders in first two tricks (or side effect: due to the attention_mask)
-        put_card_mask = states[:, :, 3].bool()
+        put_card_mask = states[:, :, 3].bool().to(self.device)
 
-        # starting from here until the loss fct, the loss is calculated
-        comb_mask = put_card_mask * attention_mask
-
-        # for loss calculation: cut out action when player cannot play card
-        # softmax guarantees to take one action -> only cutting the actions works
-        possible_action_preds_clean = possible_action_preds.clone()
-        possible_action_preds_clean = possible_action_preds_clean[comb_mask > 0]
-
-        final_valid_action_idx = torch.nonzero(possible_action_preds_clean, as_tuple=True)
-
-        valid_pred_actions = possible_action_preds_clean[final_valid_action_idx]
-
-        possible_action_targets = actions[comb_mask > 0]
-        valid_target_actions = possible_action_targets[final_valid_action_idx]
+        # # starting from here until the loss fct, the loss is calculated
+        # comb_mask = put_card_mask * attention_mask
+        #
+        # # for loss calculation: cut out action when player cannot play card
+        # # softmax guarantees to take one action -> only cutting the actions works
+        # possible_action_preds_clean = possible_action_preds.clone()
+        # possible_action_preds_clean = possible_action_preds_clean[comb_mask > 0]
+        #
+        # final_valid_action_idx = torch.nonzero(possible_action_preds_clean, as_tuple=True)
+        #
+        # valid_pred_actions = possible_action_preds_clean[final_valid_action_idx]
+        #
+        # possible_action_targets = actions[comb_mask > 0]
+        # valid_target_actions = possible_action_targets[final_valid_action_idx]
 
         # softmax has to be before the cross entropy loss
 
@@ -440,7 +453,7 @@ class TrainableDT(DecisionTransformerModel):
             return_preds=return_preds,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
-            loss=cross_ent_loss
+            loss=loss
         )
 
     def forward(self, **kwargs):
@@ -792,10 +805,9 @@ def run_training(args):
 
     print(evaluation_results)
 
-    pretrained_model = TrainableDT.from_pretrained(
-        f"./pretrained_models/Tue_Aug_29_07-31-41_2023-games_0--1-point_rewards_False")
-
-    # TODO: check for encoding over state dim and card_dim
+    # pretrained_model = TrainableDT.from_pretrained(
+    #     f"./pretrained_models/games_0-50000-encoding_one-hot-point_rewards_True-Mon_Sep__4_23-48-24_2023")
+    #
     # pretrained_model.config.state_dim = state_dim
     # # pretrained_model.config.act_dim =
     #
@@ -947,15 +959,13 @@ def evaluate_in_env(model,
 
                 actions_preds[-1] = action_pred
 
-                print(f"Action {t}: {action_pred}")
+                # print(f"Action {t}: {action_pred}")
 
                 action = action_pred.detach().numpy()
 
                 # hand cards within the state are padded from right to left after each action
                 # mask the action
                 valid_actions = action[:MAX_EPISODE_LENGTH - t]
-
-                # TODO: introduce rules
 
                 # get the index of the card with the highest probability
                 card_index = np.argmax(valid_actions)
@@ -966,8 +976,8 @@ def evaluate_in_env(model,
 
                 action_target = correct_actions[game_and_pl_idx][t]
 
-                if card_index != action_target.index(1):
-                    print(f"Action {t} incorrect, should be {action_target}")
+                # if card_index != action_target.index(1):
+                #     print(f"Action {t} incorrect, should be {action_target}")
 
                 actions[-1] = Tensor(action)
 
@@ -1010,31 +1020,42 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
     # initialise s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
 
-    for games in range(amount_games):
+    for games in tqdm(range(amount_games)):
+        # TODO: rotate players after game
 
         # build the environment for the evaluation
         states = env.online_reset()
 
-        # if point_reward:
-        #     if sum(env.trump_enc) == 0:
-        #         game_points = env.game.game_variant.get_level()
-        #         target_return = game_points * 2
-        #     else:
-        #         if sum(env.trump_enc) == 4:
-        #             base_value = 24
-        #         else:
-        #             base_value = 9 + env.trump_enc.index(1)
-        #
-        #         level = 1 + env.game.game_variant.get_level()
-        #         target_return = level * base_value * 2
-        #
-        #     target_return += 120 * 0.1 + target_return * 0.9
-        # else:
-        #     # if the reward are only the card points
-        #     target_return = 2 * 120
-        target_return = 2 * 120
+        target_return = [0] * 3
 
-        target_return = torch.tensor([target_return] * 3).float().reshape(3, 1)
+        # as the maximum reward differs for defenders and declarer,
+        # we have to differ to set the reward to the double of the maximum possible
+        for pl in range(3):
+            if point_reward:
+                if sum(env.trump_enc) == 0:
+                    game_points = env.game.game_variant.get_level()
+                    target_return[pl] = game_points * 2
+                else:
+                    if sum(env.trump_enc) == 4:
+                        base_value = 24
+                    else:
+                        base_value = 9 + env.trump_enc.index(1)
+
+                    level = 1 + env.game.game_variant.get_level()
+                    target_return[pl] = level * base_value * 2
+
+                if env.game.players[pl] == env.game.get_declarer():
+                    target_return[pl] += 120 * 0.1 + target_return[pl] * 0.9
+                else:
+                    # Seeger Score gives defenders points for winning.
+                    # We only play as 3 players -> 40 points if won as defender
+                    target_return[pl] += 120 * 0.1 + 40 * 0.9
+            else:
+                # if the reward are only the card points
+                target_return[pl] = 2 * 120
+        # target_return = 2 * 120
+
+        target_return = torch.tensor(target_return).float().reshape(3, 1)
         states = torch.from_numpy(states).reshape(3, 1, state_dim).float()
         actions = torch.zeros((3, 0, ACT_DIM)).float()
         actions_pred_eval = torch.zeros((3, 0, ACT_DIM)).float()
@@ -1051,7 +1072,15 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
             cur_state = torch.zeros(0, state_dim).float()
             cur_pred_return = torch.zeros(0, 1).float()
 
-            for current_player in range(3):
+            for i in range(3):
+                # use the first playing order as an order of playing when putting the Skat
+                # note that there is no order of playing cards during Skat putting in the game, as only the declarer
+                # takes actions
+                # after the first trick, the order of playing can change depending on the last tricks winner
+                if t <= 2:
+                    current_player = i
+
+                states[current_player, -1] = env.update_state(states[current_player, -1])
                 # rewards[current_player] = torch.cat([rewards[current_player], torch.zeros(1)], dim=0)
                 # predicting the action to take
                 action_pred = get_action(model,
@@ -1061,10 +1090,8 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
                                          target_return[current_player],
                                          timesteps)
 
-                # if (t < 2 and env.game.get_declarer().get_id() == current_player) or t >= 2:
-
-                soft_max = nn.Softmax(dim=0)
-                action_pred = soft_max(action_pred)
+                # action_pred are already soft-maxed and valid actions,
+                # we only need to prevent the argmax from choosing an all 0 action
 
                 actions_pred_eval[current_player][-1] = action_pred
 
@@ -1072,25 +1099,22 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
 
                 action = action_pred.detach().numpy()
 
-                # hand cards within the state are padded from right to left after each action
-                # mask the action
-                valid_actions = action[:MAX_EPISODE_LENGTH - t]
+                if torch.sum(action_pred) != 0:
+                    # get the index of the card with the highest probability
+                    card_index = np.argmax(action)
 
-                # TODO: introduce rules
-
-                # get the index of the card with the highest probability
-                card_index = np.argmax(valid_actions)
-
-                # only select the best card
-                action[:] = 0
-                action[card_index] = 1
+                    # only select the best card
+                    action[:] = 0
+                    action[card_index] = 1
+                else:
+                    card_index = -1
 
                 actions[current_player][-1] = Tensor(action)
 
                 # interact with the environment based on this action
                 # reward_player is a tuple of the trick winner and her reward,
                 # else there are difficulties with reward assignment
-                state, reward_player, done = env.online_step(tuple(action), current_player)
+                state, reward_player, done, current_player = env.online_step(card_index, current_player)
 
                 # print(f"Reward {t}: {reward}")
 
@@ -1102,8 +1126,8 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
                 pred_return = target_return[current_player, -1] - (rewards[reward_player[0]][-1] / scale)
                 cur_pred_return = torch.cat([cur_pred_return, pred_return.reshape(1, 1)])
 
-            target_return = torch.cat([target_return, cur_pred_return.reshape(1, 1)], dim=1)
-            states = torch.cat([states, cur_state], dim=1)
+            target_return = torch.cat([target_return, cur_pred_return], dim=1)
+            states = torch.cat([states, cur_state.unsqueeze(1)], dim=1)
             timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
 
             # TODO: loss and backward propagation
@@ -1146,9 +1170,9 @@ if __name__ == '__main__':
                         help='dataset of championship to select from. '
                              'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
                              ' contradictory.')
-    parser.add_argument('--games', type=int, default=(0, 100), nargs="+",
+    parser.add_argument('--games', type=int, default=(1, 2), nargs="+",
                         help='the games to load')
-    parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
+    parser.add_argument('--perspective', type=int, default=(0), nargs="+",
                         help='get the game from the amount of perspectives.'
                              'Note that the dataset will be split into test and train,',
                         choices=[(0, 1, 2), (0, 1), 0])  # choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])

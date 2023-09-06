@@ -607,7 +607,7 @@ if __name__ == '__main__':
     # point_rewards = True
     print(f"Reading in championship {championship}...")
 
-    for point_rewards in [True, False]:
+    for point_rewards in [False]:
         for enc in card_encodings:
             print(f"...with encoding {enc}...")
             # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)
@@ -621,9 +621,6 @@ if __name__ == '__main__':
 
             data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
 
-            # Dataset.from_dict(data_train).to_json(f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-train")
-            # Dataset.from_dict(data_test).to_json(f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-test")
-
             dataset = DatasetDict({"train": Dataset.from_dict(data_train),
                                    "test": Dataset.from_dict(data_test)})
-            dataset.save_to_disk(f"./datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-card_put")
+            dataset.save_to_disk(f"./datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-card_put-correct-Skat")
