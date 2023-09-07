@@ -300,7 +300,7 @@ def get_states_actions_rewards(
                 # pick up the Skat
                 env.state_machine.handle_action(PickUpSkatAction(env.game.get_declarer()))
 
-                current_player.cards.sort()
+                env.game.get_declarer().cards.sort()
 
                 # if a single game is selected for evaluation, create a deep copy of it directly after Skat pick up
                 if game_index == 3 * cs_index + i:
@@ -404,14 +404,12 @@ def get_states_actions_rewards(
                     fs_one_game = copy.deepcopy(env)
                     fs_one_game.hand = True
                     fs_one_game.skat_and_cs = skat_and_cs[cs_index]
-                    # fs_one_game.suit = trump
 
                 # there is no action during the Skat putting when playing hand
                 actions.extend([[0] * ACT_DIM, [0] * ACT_DIM])
                 rewards.extend([0, 0])
 
                 # if hand is played, there are two identical game states from the perspective of every player
-
                 game_state = pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
                     current_player, encoding=card_enc)
 
@@ -533,7 +531,6 @@ def get_states_actions_rewards(
                         game_state, actions, rewards = \
                             surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
                                       state_dim)
-                        # TODO: can be surrendered in the middle of the trick
                         break
                     else:
                         rewards.append(current_player.current_trick_points)
@@ -559,8 +556,9 @@ def get_states_actions_rewards(
             if point_rewards:
                 # if point_rewards add card points on top of achieved points...
                 # soloist points can be negative if she lost
+
+                # soloist_points are calculated by the extended Seeger and Fabian system
                 if current_player.type == Player.Type.DECLARER:
-                    # TODO: can be adjusted to closer match the Fabian-Seeger score, later necessary for online training
                     # add the points to the soloist
                     rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
                 elif env.game.has_declarer_won():
@@ -568,7 +566,7 @@ def get_states_actions_rewards(
                     rewards[-1] = 0.9 * 40 + rewards[-1] * 0.1  # rewards[-1] + soloist_points
             else:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games
-                rewards[-1] *= 1  # (1 if won else 0)
+                rewards[-1] *= 1 if won else 0
 
             # in the end of each game, insert the states, actions and rewards
             # with composite primary keys game_id and player perspective (1: forehand, 2: middle-hand, 3: rear-hand)
@@ -585,13 +583,8 @@ def get_states_actions_rewards(
         "states": game_state_table,
         "actions": actions_table,
         "rewards": rewards_table,
-    }, card_error_games  # , [game_state_table[i][0] for i in
-    # range(len(game_state_table))], meta_and_cards, actions_table, skat_and_cs
-
-
-# def set_memory_limit(limit_gb):
-#     limit_bytes = limit_gb * 1024 * 1024 * 1024  # Convert MB to bytes
-#     resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+    }, card_error_games, [game_state_table[i][0] for i in range(len(game_state_table))], \
+        meta_and_cards, actions_table, skat_and_cs
 
 
 if __name__ == '__main__':
@@ -602,20 +595,20 @@ if __name__ == '__main__':
 
     championship = "wc"
 
-    card_encodings = ["one-hot"] #, "mixed_comp", "one-hot_comp", "mixed"]
+    card_encodings = ["one-hot"]  # , "mixed_comp", "one-hot_comp", "mixed"]
     # for championship in POSSIBLE_CHAMPIONSHIPS:
     # point_rewards = True
     print(f"Reading in championship {championship}...")
 
-    for point_rewards in [False]:
+    for point_rewards in [True, False]:
         for enc in card_encodings:
             print(f"...with encoding {enc}...")
             # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)
 
-            data, _ = get_states_actions_rewards(championship,
-                                                 games_indices=slice(0, -1),
-                                                 point_rewards=point_rewards,
-                                                 card_enc=enc)
+            data, _, _, _, _, _ = get_states_actions_rewards(championship,
+                                                             games_indices=slice(0, -1),
+                                                             point_rewards=point_rewards,
+                                                             card_enc=enc)
 
             data_frame = pd.DataFrame(data)
 
@@ -623,4 +616,5 @@ if __name__ == '__main__':
 
             dataset = DatasetDict({"train": Dataset.from_dict(data_train),
                                    "test": Dataset.from_dict(data_test)})
-            dataset.save_to_disk(f"./datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-card_put-correct-Skat")
+            dataset.save_to_disk(
+                f"./datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-card_put-clean")

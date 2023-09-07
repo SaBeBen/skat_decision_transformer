@@ -16,6 +16,7 @@ from typing import Dict, Union, Optional, List, Any, Tuple
 import numpy as np
 import pandas as pd
 import torch
+from accelerate import Accelerator
 from tqdm import tqdm
 
 from datasets import Dataset, DatasetDict, load_from_disk
@@ -61,19 +62,7 @@ class DecisionTransformerSkatDataCollator:
         self.state_dim = len(dataset[0]["states"][0])
         self.dataset = dataset
         self.batch_size = batch_size
-        # calculate dataset stats for normalization of states
-        states = []
-        traj_lens = []
-        for obs in dataset["states"]:
-            states.extend(obs)
-            traj_lens.append(len(obs))
-        self.n_traj = len(traj_lens)
-
-        states = np.vstack(states)
-        self.state_mean, self.state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
-
-        traj_lens = np.array(traj_lens)
-        self.p_sample = traj_lens / sum(traj_lens)
+        # we do not need state normalisation with our one-hot encoding
 
     def _discount_cumsum(self, x, gamma):
         # weighted rewards are in the data set (get_states_actions_rewards)
@@ -85,8 +74,6 @@ class DecisionTransformerSkatDataCollator:
         return discount_cumsum
 
     def __call__(self, features):
-        # batch_inds = self.get_batch_ind()
-
         # features are already batched, but
         # we always want to put out batches of batch_size, len(features) can be < batch_size, then either we have issues
         # in forward or if we drop smaller batches, we can not train under 32 games (for overfitting)
@@ -518,8 +505,6 @@ class TrainableDT(DecisionTransformerModel):
         # predictions have to be passed as tensors
         rate_oob_actions = Tensor([actions_oob.shape[0] / action_targets.shape[0]])
 
-        # prob_illegal_action =
-
         return {"loss": loss,
                 "probability_of_correct_action": prob_correct_action,
                 "rate_wrong_action_taken": rate_wrong_action_taken,
@@ -680,16 +665,19 @@ def run_training(args):
     else:
         context_length = 1024
 
-    if games_to_load.stop == -1 or games_to_load.stop - games_to_load.start >= 10000:
+    load_dataset = games_to_load.stop == -1 or games_to_load.stop - games_to_load.start >= 10000
+
+    if load_dataset:
         # "wc-without_surr_and_passed-pr_True-one-hot"
-        dataset = load_from_disk(f"./datasets/wc-without_surr_and_passed-pr_{point_rewards}-{hand_encoding}")
+        dataset = load_from_disk(f"./datasets/wc-without_surr_and_passed-pr_{point_rewards}-{hand_encoding}-card_put")
         amount_games = (games_to_load.stop - games_to_load.start) * 3  # * 3 for every perspective
         dataset['train'] = Dataset.from_dict(dataset['train'][:math.floor(amount_games * 0.8)])
         dataset['test'] = Dataset.from_dict(dataset['test'][:math.floor(amount_games * 0.2)])
     else:
         print("\nLoading data...")
         game_index = 5
-        data, _ = data_pipeline.get_states_actions_rewards(  # first_states, meta_and_cards, actions_table, skat_and_cs
+        data, _, first_states, meta_and_cards, actions_table, skat_and_cs = data_pipeline.get_states_actions_rewards(
+            # first_states, meta_and_cards, actions_table, skat_and_cs
             championship=championship,
             games_indices=games_to_load,
             point_rewards=point_rewards,
@@ -729,8 +717,7 @@ def run_training(args):
     )
 
     if pretrained_model_path is not None:
-        pretrained_model = TrainableDT.from_pretrained(
-            f"./pretrained_models/{pretrained_model_path}")
+        pretrained_model = TrainableDT.from_pretrained(pretrained_model_path)
         model = pretrained_model
     else:
         model = TrainableDT(config)
@@ -750,6 +737,7 @@ def run_training(args):
         num_train_epochs=num_train_epochs,
         per_device_train_batch_size=32,
         per_device_eval_batch_size=32,
+        gradient_accumulation_steps=4,
         learning_rate=l_rate,
         weight_decay=weight_decay,
         warmup_ratio=warmup_ratio,
@@ -763,7 +751,7 @@ def run_training(args):
     )
 
     if eval_in_training:
-        training_args.do_eval = True,
+        training_args.do_eval = True
         training_args.evaluation_strategy = "steps"
         training_args.eval_steps = 100
 
@@ -777,8 +765,8 @@ def run_training(args):
         # callbacks=[tensorboard_callback]  # here or in "report_to" of args
     )
 
-    print(f"\nTraining on games {games_to_load.start, games_to_load.stop} with {hand_encoding} encoding...")
-    trainer.train()
+    # print(f"\nTraining on games {games_to_load.start, games_to_load.stop} with {hand_encoding} encoding...")
+    # trainer.train()
 
     # for tensorboard visualization:
     # 1. rm -r ./training-logs/*
@@ -797,22 +785,22 @@ def run_training(args):
     # if save_model:
     #     model.save_pretrained(rf"./pretrained_models/{dir_name}")
 
-    training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
-
-    trainer.data_collator = DecisionTransformerSkatDataCollator(dataset["test"])
-
-    evaluation_results = trainer.evaluate()
-
-    print(evaluation_results)
+    # training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
+    #
+    # trainer.data_collator = DecisionTransformerSkatDataCollator(dataset["test"])
+    #
+    # evaluation_results = trainer.evaluate()
+    #
+    # print(evaluation_results)
 
     # first_states = dataset['test']['states'][]
-    # if games_to_load.stop != -1:
-    #     evaluate_in_env(model, point_rewards, state_dim,
-    #                     card_enc=hand_encoding,
-    #                     first_states=first_states,
-    #                     meta_and_cards_game=meta_and_cards,
-    #                     skat_and_cs=skat_and_cs,
-    #                     correct_actions=actions_table)
+    if not load_dataset:
+        evaluate_in_env(model, point_rewards, state_dim,
+                        card_enc=hand_encoding,
+                        first_states=first_states,
+                        meta_and_cards_game=meta_and_cards,
+                        skat_and_cs=skat_and_cs,
+                        correct_actions=actions_table)
 
 
 # ------------------------------------------------------------------------------------
@@ -865,15 +853,13 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
 #
 #             action_pred = get_action(model, )
 #
-#             loss = nn.CrossEntropyLoss(action_pred, action_target)
-#
 #             # Backpropagation
 #             optimizer.zero_grad()
 #             loss.backward()
 #             # Optimisation
 #             optimizer.step()
 
-# less efficient manual evaluation, actually plays Skat in background
+# less efficient manual evaluation, actually plays Skat in background in evaluate_in_env
 # motivation:   ability to see the game and throw errors when AI plays game
 #               expense in normal evaluation (forward) to find out whether card is legal
 def evaluate_in_env(model,
@@ -892,22 +878,9 @@ def evaluate_in_env(model,
 
     amount_games = math.floor(len(first_states) / 3)
 
-    for game_idx in range(amount_games):
-        if point_reward:
-            if sum(env.trump_enc) == 0:
-                game_points = env.game.game_variant.get_level()
-                target_return = game_points * 2
-            else:
-                if sum(env.trump_enc) == 4:
-                    base_value = 24
-                else:
-                    base_value = 9 + env.trump_enc.index(1)
+    correct_actions = np.argmax(correct_actions, axis=2)
 
-                level = 1 + env.game.game_variant.get_level()
-                target_return = level * base_value * 2
-        else:
-            # if the reward are only the card points
-            target_return = 2 * 120
+    for game_idx in range(amount_games):
 
         for current_player in range(3):
             game_and_pl_idx = game_idx + current_player
@@ -917,14 +890,43 @@ def evaluate_in_env(model,
                               meta_and_cards_game=meta_and_cards_game[game_and_pl_idx],
                               skat_and_cs=skat_and_cs[game_and_pl_idx])
 
+            # Whether to use the Seeger-Fabian score or not
+            if point_reward:
+                if env.current_player == env.game.get_declarer():
+                    if sum(env.trump_enc) == 0:
+                        game_points = env.game.game_variant.get_level()
+                        target_return = game_points * 2
+                    else:
+                        if sum(env.trump_enc) == 4:
+                            base_value = 24
+                        else:
+                            base_value = 9 + env.trump_enc.index(1)
+
+                        level = 1 + env.game.game_variant.get_level()
+                        # when playing as declarer the maximum points are doubled like some configurations
+                        # of the DT paper (Chen et al., 2021)
+                        # both are scaled to hinder reward hacking
+                        target_return = 0.1 * 2 * 120 + 0.9 * (level * base_value * 2 + 50)
+                else:
+                    # it is enough to reach 60 points as defender to win and practically impossible to reach 120,
+                    # thus, the rewards are doubled from 60 and the bonus of a loss of the declarer is added
+                    # both are scaled to hinder reward hacking
+                    target_return = 0.1 * 120 + 0.9 * 40
+            else:
+                if env.current_player == env.game.get_declarer():
+                    # if the reward are only the card points
+                    target_return = 2 * 120
+                else:
+                    # it is enough to reach 60 points as defender to win and practically impossible to reach 120,
+                    # thus, the rewards are doubled from 60 and the bonus of a loss of the declarer is added
+                    target_return = 120
+
             target_return = torch.tensor(target_return).float().reshape(1, 1)
             states = torch.from_numpy(state).reshape(1, state_dim).float()
             actions = torch.zeros((0, ACT_DIM)).float()
             actions_preds = torch.zeros((0, ACT_DIM)).float()
             rewards = torch.zeros(0).float()
             timesteps = torch.tensor(0).reshape(1, 1).long()
-
-            print(f"Actions should be {torch.argmax(correct_actions[game_and_pl_idx])}")
 
             # take steps in the environment (evaluation, not training)
             for t in range(MAX_EPISODE_LENGTH):
@@ -941,30 +943,26 @@ def evaluate_in_env(model,
                                          target_return,
                                          timesteps)
 
-                soft_max = nn.Softmax(dim=0)
-                action_pred = soft_max(action_pred)
-
                 actions_preds[-1] = action_pred
-
-                # print(f"Action {t}: {action_pred}")
 
                 action = action_pred.detach().numpy()
 
-                # hand cards within the state are padded from right to left after each action
-                # mask the action
-                valid_actions = action[:MAX_EPISODE_LENGTH - t]
-
                 # get the index of the card with the highest probability
-                card_index = np.argmax(valid_actions)
+                card_index = np.argmax(action)
 
                 # only select the best card
                 action[:] = 0
                 action[card_index] = 1
 
-                action_target = correct_actions[game_and_pl_idx][t]
+                card_pred = env.current_player.cards[card_index]
+                action_target_idx = correct_actions[game_and_pl_idx][t]
+                card_target = env.current_player.cards[action_target_idx]
 
-                # if card_index != action_target.index(1):
-                #     print(f"Action {t} incorrect, should be {action_target}")
+                if card_index != action_target_idx:
+                    print(f"Predicted action: {action_pred} vs Index of correct action {action_target_idx}")
+                    print(f"Agent selected {card_pred}, is {card_target}")
+                else:
+                    print("check")
 
                 actions[-1] = Tensor(action)
 
@@ -994,10 +992,6 @@ def evaluate_in_env(model,
                     break
 
 
-# TODO: Implementation of Online DT
-#  stated in ausschreibung: Idea of 3 models learning the game through self-play after learning it from expert data
-#  alternative: see Online DT Algorithm 1 and 2 (see above for idea)
-
 def run_online_dt(args):
     # game specific arguments
     championship = args['championship']
@@ -1018,7 +1012,7 @@ def run_online_dt(args):
                     )
 
 
-def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
+def train_online_dt(model, point_reward, state_dim, card_enc, amount_games, first_game_states=None):
     scale = 1
 
     # env = environment.Env() if one_game is None else one_game
@@ -1026,9 +1020,41 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
     # initialise s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
 
-    for games in tqdm(range(amount_games)):
-        env = Env(card_enc)
+    # accelerator = Accelerator(gradient_accumulation_steps=1)
+    # optimiser = torch.optim.Adam(model.config)
+    # model = accelerator.prepare_model(model)
+
+    # current_time = time.asctime().replace(':', '-').replace(' ', '_')
+    #
+    # dir_name = rf"online_training-episodes_{amount_games}-point_rewards_{point_reward}-{current_time}"
+    #
+    # logging_dir = rf"./training-logs/{dir_name}"
+    #
+    # training_args = TrainingArguments(
+    #     report_to=["tensorboard"],
+    #     output_dir="online_training_output/",
+    #     remove_unused_columns=False,
+    #     num_train_epochs=240,
+    #     per_device_train_batch_size=32,
+    #     per_device_eval_batch_size=32,
+    #     gradient_accumulation_steps=4,
+    #     optim="adamw_torch",
+    #     max_grad_norm=0.1,
+    #     logging_steps=50,
+    #     logging_dir=logging_dir,
+    #     save_steps=5000
+    # )
+    #
+    # trainer = DTTrainer(  # CustomDTTrainer
+    #     model=model,
+    #     args=training_args
+    # )
+    #
+    # trainer.training_step(model)
+
+    for _ in tqdm(range(amount_games)):
         # TODO: rotate players after game
+        env = Env(card_enc)
 
         # build the environment for the evaluation
         states = env.online_reset()
@@ -1205,10 +1231,19 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
 
         for current_player in range(3):
             # for evaluation of unspecific games
-            diff_target_reached = target_return[current_player] - sum(rewards[current_player])
+            diff_target_reached = torch.sub(target_return[current_player, 0], target_return[current_player, -1])
 
             # MSE loss
             loss = diff_target_reached ** 2
+
+            if env.game.get_declarer().id == current_player:
+                print(f"{env.game.get_declarer()} achieved a score of {rewards[current_player]}")
+
+            # model.zero_grad()
+
+            mse_loss = torch.nn.MSELoss()
+            loss = mse_loss(target_return[current_player, 0], target_return[current_player, -1])
+            # accelerator.backward(loss)
 
             print(
                 f"Difference of target reward and reached reward of player {current_player}: {diff_target_reached}")
@@ -1217,9 +1252,11 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games):
     return model
 
 
-def model_file(rel_path: str):
+def file_check(rel_path: str):
     # check whether the pre-trained model file exists
     from os.path import exists
+
+    rel_path = f"./pretrained_models/{rel_path}"
     if not exists(rel_path):
         raise argparse.ArgumentTypeError("Model file does not exist")
     else:
@@ -1268,7 +1305,7 @@ if __name__ == '__main__':
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
     parser.add_argument('--logging_steps', type=int, default=20)
-    parser.add_argument('--pretrained_model', type=model_file, default=None,
+    parser.add_argument('--pretrained_model', type=file_check, default="games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
     parser.add_argument('--eval_in_training', type=bool, default=True,

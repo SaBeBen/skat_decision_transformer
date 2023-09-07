@@ -102,13 +102,14 @@ class GameVariantGrand(GameVariant):
 # Concrete game variant class for suit game
 # ------------------------------------------------------------
 class GameVariantSuit(GameVariantGrand):
-    def __init__(self, trump_suit, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
+    def __init__(self, trump_suit, peaks=1, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
         # expects name of trump suit
         self.trump_suit = trump_suit
         self.hand = hand
         self.scheider_called = schneider_called | schwarz_called | ouvert
         self.schwarz_called = schwarz_called | ouvert
         self.ouvert = ouvert
+        self.peaks = peaks
 
     def compare_cards(self, card_higher, card_lower):
         if self.is_trump(card_higher) and not self.is_trump(card_lower):
@@ -126,6 +127,9 @@ class GameVariantSuit(GameVariantGrand):
 
     def get_trump(self):
         return Card.Suit[self.trump_suit].value + 9
+
+    def get_level(self):
+        return self.peaks + self.ouvert + self.schwarz_called + self.scheider_called + self.hand
 
 
 # ------------------------------------------------------------

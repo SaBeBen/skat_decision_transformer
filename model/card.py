@@ -112,3 +112,22 @@ class Card:
             return self.face.value < other.face.value
         else:
             return self.suit.value < other.suit.value
+
+    def gt_for_peaks(self, other, trump_suit):
+        # comparison to sort the Js to the left of the hand followed by the trump suit
+        if self.face.value == 8:
+            if other.face.value == 8:
+                return self.suit.value > other.suit.value
+            return True
+        if other.face.value == 8:
+            return False
+        if self.suit.value == trump_suit:
+            if other.suit.value == trump_suit:
+                return self.face.value > other.face.value
+            return True
+        if other.suit == trump_suit:
+            return False
+        if self.suit is other.suit:
+            return self.face.value > other.face.value
+        else:
+            return self.suit.value > other.suit.value
