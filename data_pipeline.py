@@ -1,4 +1,3 @@
-import copy
 from math import ceil
 
 import numpy as np
@@ -117,7 +116,7 @@ def surrender(won, current_player, soloist_points, trick, game_state, actions, r
 
 
 def declare_game_variant(env, trump):
-    # declare the game variant, TODO: implement null rewards
+    # declare the game variant
     if trump == 0 or trump == 35 or trump == 46 or trump == 59:
         # null
         env.state_machine.handle_action(DeclareGameVariantAction(env.game.get_declarer(), GameVariantNull()))
@@ -126,7 +125,7 @@ def declare_game_variant(env, trump):
         env.state_machine.handle_action(DeclareGameVariantAction(env.game.get_declarer(), GameVariantGrand()))
     else:
         # convert DB encoding to env encoding
-        suit = Card.Suit(trump - 9).name
+        suit = Card.Suit(trump - 9)
         # announce game variant
         env.state_machine.handle_action(DeclareGameVariantAction(env.game.get_declarer(), GameVariantSuit(suit)))
 
@@ -135,39 +134,49 @@ def get_states_actions_rewards(
         championship="wc",
         games_indices=slice(0, 1000),
         point_rewards=False,
-        game_index=-1,
         perspective=(0, 1, 2),
         card_enc='mixed_comp'
 ):
+    """
+    Load championship log data from csv files, replay the games, while at the same time transforming it into our
+    state, action and reward representation.
+    Only processes non-surrendered suit games, but is able to output all variants.
+
+    :param championship: The championship to prepare. Input: abbreviation of the championship. Only "wc" works due to
+    corrupt logging in the database.
+    :param games_indices: The games to load.
+    :param point_rewards: Use of the Seeger-Fabian score for the last reward. If False, uses a simple reward based
+    on card points and game success.
+    :param perspective: The player(s)' perspectives. Cannot
+    :param card_enc: The card encoding to use. "one-hot", "mixed", "mixed_comp" and "one-hot_comp" are possible.
+    :return:
+    """
+
+    # load the meta information, initial card configuration (meta_and_cards) and the course of the game (skat_and_cs)
     meta_and_cards, skat_and_cs = get_game(game=championship, games_indices=games_indices)
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(card_enc)
 
-    # position of the team player with respect to own pos; if 0 -> soloist
-    # alternating players perspective = {FH/MH/RH}
-    # -> pos_p
-    # -> hand_cards
-    fs_one_game = None
-
     amount_games = len(meta_and_cards)
 
     if not isinstance(perspective, tuple):
+        # for perspective of first player
         perspective = [perspective]
         len_p = 1
     else:
         len_p = len(perspective)
 
-    game_state_table = [[] * state_dim * 10] * amount_games * len_p
-
-    actions_table = [[] * ACT_DIM * 10] * amount_games * len_p
-
-    rewards_table = [[] * 10] * amount_games * len_p
+    # tables to load the states, actions and rewards
+    game_state_table = [[] * state_dim * 12] * amount_games * len_p
+    actions_table = [[] * ACT_DIM * 12] * amount_games * len_p
+    rewards_table = [[] * 12] * amount_games * len_p
 
     # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0
 
+    # for skipping games where an illegal move occured, no game in skipped in the wc
     skip = False
-
+    # return the ids of the corrupted games
     card_error_games = []
 
     for game in tqdm(meta_and_cards):
@@ -190,11 +199,10 @@ def get_states_actions_rewards(
 
             # categorical encoding of trump suit color
             # if a grand is played --> [1, 1, 1, 1]
-            # if a null game is played --> [0, 0, 0, 0]     # TODO: implement null ouvert
+            # if a null game is played --> [0, 0, 0, 0]
             trump_enc = get_trump_enc(trump)
 
             # if a game was surrendered, the amount of tricks played before surrender is stored in surrendered trick
-            #
             surrendered_card = skat_and_cs[cs_index, -1]
             if surrendered_card > -1:
                 surrendered_trick = ceil(surrendered_card / 3)
@@ -243,9 +251,6 @@ def get_states_actions_rewards(
             if agent_player == player_id:
                 # if the perspective of the agent is the soloist
 
-                # used to encode position of agent for game identification
-                # agent_player = i
-
                 # encode the position of the players: 0 for self, 1 for team, -1 for opponent
                 pos_p[(i + 1) % 3] = -1
                 pos_p[(i + 2) % 3] = -1
@@ -259,8 +264,6 @@ def get_states_actions_rewards(
             else:
                 current_player.type = Player.Type.DEFENDER
                 if player_id == game[1 + (i + 1) % 3]:
-                    # agent_player = (i + 1) % 3
-
                     pos_p[(i + 1) % 3] = -1
                     pos_p[(i + 2) % 3] = 1
 
@@ -270,8 +273,6 @@ def get_states_actions_rewards(
                     env.state_machine.handle_action(BidPassAction(current_player, 18))
                     env.state_machine.handle_action(BidPassAction(current_player3, 18))
                 else:
-                    # agent_player = (i + 2) % 3
-
                     pos_p[(i + 1) % 3] = 1
                     pos_p[(i + 2) % 3] = -1
 
@@ -301,13 +302,6 @@ def get_states_actions_rewards(
                 env.state_machine.handle_action(PickUpSkatAction(env.game.get_declarer()))
 
                 env.game.get_declarer().cards.sort()
-
-                # if a single game is selected for evaluation, create a deep copy of it directly after Skat pick up
-                if game_index == 3 * cs_index + i:
-                    fs_one_game = copy.deepcopy(env)
-                    # fs_one_game.skat_up = skat_up
-                    fs_one_game.skat_and_cs = skat_and_cs[cs_index]
-                    # fs_one_game.suit = trump
 
                 if current_player.type == Player.Type.DECLARER:
                     put_card = [1]
@@ -399,12 +393,6 @@ def get_states_actions_rewards(
                 # if hand is played, show to not put a card
                 put_card = [0]
 
-                # if a single game is selected for evaluation, create a deep copy of it
-                if game_index == 3 * cs_index + i:
-                    fs_one_game = copy.deepcopy(env)
-                    fs_one_game.hand = True
-                    fs_one_game.skat_and_cs = skat_and_cs[cs_index]
-
                 # there is no action during the Skat putting when playing hand
                 actions.extend([[0] * ACT_DIM, [0] * ACT_DIM])
                 rewards.extend([0, 0])
@@ -418,11 +406,6 @@ def get_states_actions_rewards(
 
             # declare the game variant
             declare_game_variant(env, trump)
-
-            # safe the game variant for the evaluated game
-            if game_index == 3 * cs_index + i:
-                fs_one_game.game.game_variant = env.game.game_variant
-                fs_one_game.skat_down = copy.deepcopy(skat_down)
 
             # if the game is surrendered instantly
             if surrendered_trick == 0:

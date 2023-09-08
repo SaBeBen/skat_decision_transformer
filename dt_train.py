@@ -16,7 +16,6 @@ from typing import Dict, Union, Optional, List, Any, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from accelerate import Accelerator
 from tqdm import tqdm
 
 from datasets import Dataset, DatasetDict, load_from_disk
@@ -542,7 +541,7 @@ class DTTrainer(Trainer):
         # injected behaviour
         if len(output.predictions[0].shape) != 0:
             output.metrics.update(
-                {"eval_loss: ": round(float(output.predictions[0][-1]), 4),
+                {"eval_loss": round(float(output.predictions[0][-1]), 4),
                  "eval_prob_correct_action": round(float(output.predictions[1][-1]), 4),
                  "eval_rate_wrong_action_taken": round(float(output.predictions[2][-1]), 4),
                  "eval_rate_oob_actions": round(float(output.predictions[3][-1]), 4)
@@ -551,7 +550,7 @@ class DTTrainer(Trainer):
         else:
             # edge case of one game
             output.metrics.update(
-                {"eval_loss: ": round(float(output.predictions[0]), 4),
+                {"eval_loss": round(float(output.predictions[0]), 4),
                  "eval_prob_correct_action": round(float(output.predictions[1]), 4),
                  "eval_rate_wrong_action_taken": round(float(output.predictions[2]), 4),
                  "eval_rate_oob_actions": round(float(output.predictions[3]), 4)
@@ -675,13 +674,11 @@ def run_training(args):
         dataset['test'] = Dataset.from_dict(dataset['test'][:math.floor(amount_games * 0.2)])
     else:
         print("\nLoading data...")
-        game_index = 5
         data, _, first_states, meta_and_cards, actions_table, skat_and_cs = data_pipeline.get_states_actions_rewards(
             # first_states, meta_and_cards, actions_table, skat_and_cs
             championship=championship,
             games_indices=games_to_load,
             point_rewards=point_rewards,
-            game_index=game_index,
             perspective=perspective,
             card_enc=hand_encoding)
 
@@ -804,7 +801,6 @@ def run_training(args):
 
 
 # ------------------------------------------------------------------------------------
-#                           Interactive Implementation
 
 # Function that gets an action from the model using autoregressive prediction
 # with a window of the previous 20 timesteps. We only need a maximum of 12 timesteps
@@ -859,9 +855,7 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
 #             # Optimisation
 #             optimizer.step()
 
-# less efficient manual evaluation, actually plays Skat in background in evaluate_in_env
-# motivation:   ability to see the game and throw errors when AI plays game
-#               expense in normal evaluation (forward) to find out whether card is legal
+
 def evaluate_in_env(model,
                     point_reward,
                     state_dim,
@@ -870,25 +864,32 @@ def evaluate_in_env(model,
                     meta_and_cards_game,
                     skat_and_cs,
                     correct_actions):
-    # TODO: test
-    scale = 1
+    """
+    Less efficient manual evaluation, actually plays Skat in background:
 
-    # env = environment.Env() if one_game is None else one_game
-    env = Env(card_enc)
+    This evaluation guides the agent through a game.
+    If another card than in the data was played, the course of the game would shift,
+    e.g. if the agent puts a different card in the Skat, he will miss this card during play and can
+    eventually play other cards, as the distribution of suits on the hand changes.
+    """
+
+    scale = 1
 
     amount_games = math.floor(len(first_states) / 3)
 
-    correct_actions = np.argmax(correct_actions, axis=2)
+    correct_actions_idx = np.argmax(correct_actions, axis=2)
 
     for game_idx in range(amount_games):
 
         for current_player in range(3):
-            game_and_pl_idx = game_idx + current_player
+            game_and_pl_idx = 3 * game_idx + current_player
+
+            env = Env(card_enc)
 
             # build the environment for the evaluation
             state = env.reset(current_player, game_first_state=first_states[game_and_pl_idx],
-                              meta_and_cards_game=meta_and_cards_game[game_and_pl_idx],
-                              skat_and_cs=skat_and_cs[game_and_pl_idx])
+                              meta_and_cards_game=meta_and_cards_game[game_idx],
+                              skat_and_cs=skat_and_cs[game_idx])
 
             # Whether to use the Seeger-Fabian score or not
             if point_reward:
@@ -930,6 +931,7 @@ def evaluate_in_env(model,
 
             # take steps in the environment (evaluation, not training)
             for t in range(MAX_EPISODE_LENGTH):
+
                 # add zeros for actions as input for the current time-step
                 actions = torch.cat([actions, torch.zeros((1, ACT_DIM))], dim=0)
                 actions_preds = torch.cat([actions_preds, torch.zeros((1, ACT_DIM))], dim=0)
@@ -954,15 +956,14 @@ def evaluate_in_env(model,
                 action[:] = 0
                 action[card_index] = 1
 
+                action_target_idx = correct_actions_idx[game_and_pl_idx][t]
                 card_pred = env.current_player.cards[card_index]
-                action_target_idx = correct_actions[game_and_pl_idx][t]
                 card_target = env.current_player.cards[action_target_idx]
 
                 if card_index != action_target_idx:
-                    print(f"Predicted action: {action_pred} vs Index of correct action {action_target_idx}")
-                    print(f"Agent selected {card_pred}, is {card_target}")
-                else:
-                    print("check")
+                    # put card from targets, if agent wants to select other
+                    action = correct_actions[game_and_pl_idx][t]
+                    print(f"Agent wanted to select {card_pred}, but target is {card_target}")
 
                 actions[-1] = Tensor(action)
 
@@ -984,15 +985,29 @@ def evaluate_in_env(model,
                     [timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
 
                 if done:
-                    game_loss = nn.NLLLoss(correct_actions[game_and_pl_idx], actions_preds)
+                    nll_fct = nn.NLLLoss()
+
+                    action_targets = torch.from_numpy(correct_actions[game_and_pl_idx])
+
+                    # mask zero actions for the loss, otherwise nll_loss = inf due to argmax selecting the first 0 as
+                    # target index when no action is taken
+                    mask_wo_zeros = action_targets.sum(dim=1)
+                    mask_wo_zeros = mask_wo_zeros > 0
+
+                    action_targets = action_targets[mask_wo_zeros]
+
+                    actions_preds = actions_preds[mask_wo_zeros]
+
+                    nll_loss = nll_fct(torch.log(actions_preds),
+                                       torch.argmax(action_targets, dim=1))
 
                     # log
-                    print(f"Loss of game {game_and_pl_idx}: {game_loss}")
+                    print(f"Loss of game {game_and_pl_idx}: {nll_loss}")
 
                     break
 
 
-def run_online_dt(args):
+def run_online_eval(args):
     # game specific arguments
     championship = args['championship']
     hand_encoding = args['hand_encoding']
@@ -1004,15 +1019,15 @@ def run_online_dt(args):
 
     pretrained_model.config.state_dim = state_dim
 
-    train_online_dt(pretrained_model,
-                    point_reward=point_rewards,
-                    state_dim=state_dim,
-                    card_enc=hand_encoding,
-                    amount_games=10
-                    )
+    eval_three_agents(pretrained_model,
+                      point_reward=point_rewards,
+                      state_dim=state_dim,
+                      card_enc=hand_encoding,
+                      amount_games=10
+                      )
 
 
-def train_online_dt(model, point_reward, state_dim, card_enc, amount_games, first_game_states=None):
+def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games, first_game_states=None):
     scale = 1
 
     # env = environment.Env() if one_game is None else one_game
@@ -1252,6 +1267,296 @@ def train_online_dt(model, point_reward, state_dim, card_enc, amount_games, firs
     return model
 
 
+def play_with_two(args):
+    # game specific arguments
+    championship = args['championship']
+    hand_encoding = args['hand_encoding']
+    point_rewards = args['point_rewards']
+    human_position = args['play_as']
+
+    card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
+    pretrained_model = TrainableDT.from_pretrained(
+        f"./pretrained_models/games_0-50000-encoding_one-hot-point_rewards_True-Mon_Sep__4_23-48-24_2023")
+
+    pretrained_model.config.state_dim = state_dim
+
+    play_with_two_agents(pretrained_model,
+                         point_reward=point_rewards,
+                         state_dim=state_dim,
+                         card_enc=hand_encoding,
+                         amount_games=10,
+                         human_player_start=human_position
+                         )
+
+
+def play_with_two_agents(model,
+                         point_reward,
+                         state_dim,
+                         card_enc,
+                         amount_games,
+                         human_player_start,
+                         first_game_states=None):
+    scale = 1
+
+    # initialise s, a, r, t and raw action logits for every player
+    states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
+    
+    # The list points for the human player and the two agents
+    list_points = [0, 0, 0]
+
+    for j in tqdm(range(amount_games)):
+        env = Env(card_enc)
+        
+        # rotate position of human player
+        human_player_id = (human_player_start + j) % 3
+
+        # build the environment for the evaluation
+        states = env.online_reset()
+
+        target_return = [0] * 3
+
+        # as the maximum reward differs for defenders and declarer,
+        # we have to differ to set the reward to the double of the maximum possible
+        for pl in range(3):
+            if point_reward:
+                if sum(env.trump_enc) == 0:
+                    game_points = env.game.game_variant.get_level()
+                    target_return[pl] = game_points * 2
+                else:
+                    if sum(env.trump_enc) == 4:
+                        base_value = 24
+                    else:
+                        base_value = 9 + env.trump_enc.index(1)
+
+                    level = 1 + env.game.game_variant.get_level()
+                    target_return[pl] = level * base_value * 2
+
+                if env.game.players[pl] == env.game.get_declarer():
+                    target_return[pl] += 120 * 0.1 + target_return[pl] * 0.9
+                else:
+                    # Seeger Score gives defenders points for winning.
+                    # We only play as 3 players -> 40 points if won as defender
+                    target_return[pl] += 120 * 0.1 + 40 * 0.9
+            else:
+                # if the reward are only the card points
+                target_return[pl] = 2 * 120
+        # target_return = 2 * 120
+
+        target_return = torch.tensor(target_return).float().reshape(3, 1)
+        states = torch.from_numpy(states).reshape(3, 1, state_dim).float()
+        actions = torch.zeros((3, 0, ACT_DIM)).float()
+        actions_pred_eval = torch.zeros((3, 0, ACT_DIM)).float()
+        rewards = torch.zeros(3, 0).float()
+        timesteps = torch.tensor(0).reshape(1, 1).long()
+
+        # take steps in the environment (evaluation, not training)
+        for t in range(12):
+            # add zeros for actions as input for the current time-step
+            actions = torch.cat([actions, torch.zeros((3, 1, ACT_DIM))], dim=1)
+            actions_pred_eval = torch.cat([actions_pred_eval, torch.zeros((3, 1, ACT_DIM))], dim=1)
+            rewards = torch.cat([rewards, torch.zeros(3, 1)], dim=1)
+
+            cur_state = torch.zeros(0, state_dim).float()
+
+            cur_state = np.array([[0] * state_dim] * 3)
+            cur_pred_return = torch.zeros(0, 1).float()
+
+            for i in range(3):
+                # use the first playing order as an order of playing when putting the Skat
+                # note that there is no order of playing cards during Skat putting in the game, as only the declarer
+                # takes actions
+                # after the first trick, the order of playing can change depending on the last tricks winner
+
+                # skat putting
+                if t < 2:
+                    current_player = i
+                    if current_player == env.game.get_declarer().get_id():
+
+                        if current_player == human_player_id:
+                            # define input action
+                            print(f"\nYou play as the declarer (player {i}).\n"
+                                  f"\n{env.game.game_variant.get_variant_name()} "
+                                  f" Your cards are {env.game.players[i].cards}")
+
+                            card_index = -1
+                            while card_index > (12 - t) or card_index < 0:
+                                card_index = input(
+                                    f"Which card do you want to put in the Skat "
+                                    f"(possible indices in range 0, {12 - t})?")
+                                try:
+                                    card_index = int(card_index)
+                                except ValueError:
+                                    print("Invalid input. Please enter a valid number.")
+
+                            action = [0] * 12
+                            action[card_index] = 1
+                        else:
+                            action_pred = get_action(model,
+                                                     states[current_player],
+                                                     actions[current_player],
+                                                     rewards[current_player],
+                                                     target_return[current_player],
+                                                     timesteps)
+                            # action_pred are already soft-maxed and valid actions,
+                            # we only need to prevent the argmax from choosing an all 0 action
+
+                            actions_pred_eval[current_player][-1] = action_pred
+
+                            action = action_pred.detach().numpy()
+
+                            if torch.sum(action_pred) != 0:
+                                # get the index of the card with the highest probability
+                                card_index = np.argmax(action)
+
+                                # only select the best card
+                                action[:] = 0
+                                action[card_index] = 1
+                            else:
+                                card_index = -1
+
+                        actions[current_player][-1] = Tensor(action)
+
+                        # interact with the environment based on this action
+                        # reward_player is a tuple of the trick winner and reward to propagate it
+                        state, reward_player, done, _ = env.online_step(card_index, current_player)
+
+                        cur_state[i] = state
+
+                    else:
+                        state = states[current_player, -1]
+                        reward_player = [current_player, 0]
+
+                        action_pred = get_action(model,
+                                                 states[current_player],
+                                                 actions[current_player],
+                                                 rewards[current_player],
+                                                 target_return[current_player],
+                                                 timesteps)
+                        actions_pred_eval[current_player][-1] = action_pred
+
+                        actions[current_player][-1] = Tensor([0] * 12)
+
+                        # allow to play a card after Skat putting
+                        if t == 1:
+                            state[3] = 1
+
+                        # cur_state = torch.cat([cur_state, state.reshape(1, state_dim)])
+                        cur_state[current_player] = state
+
+                else:
+                    # start at the first seat, at the player besides the dealer
+                    if (t == 2) and (i == 0):
+                        current_player = env.game.get_first_seat().id
+
+                    if current_player == human_player_id:
+                        # define input action
+                        if t == 2:
+                            print(f"\nYou play as player {human_player_id}. "
+                                  f"\nYou are {env.game.players[human_player_id].get_role()}"
+                                  f"\n{env.game.game_variant.get_variant_name()} "
+                                  f"is played by player {env.game.get_declarer().get_id()}")
+
+                        print(f"\nYour cards are {env.game.players[human_player_id].cards}")
+                        print(f"The open cards are {env.game.trick.get_open_cards()}")
+
+                        # to see what model would have chosen
+                        action_pred = get_action(model,
+                                                 states[human_player_id],
+                                                 actions[human_player_id],
+                                                 rewards[human_player_id],
+                                                 target_return[human_player_id],
+                                                 timesteps)
+
+                        legal_indices = torch.nonzero(action_pred, as_tuple=True)
+                        legal_indices = legal_indices[0].detach().numpy()
+
+                        card_index = -1
+                        card_index = input(
+                            f"Which card do you want to select?"
+                            f"\nPossible indices are {legal_indices}")
+                        try:
+                            card_index = int(card_index)
+                        except ValueError:
+                            print("Invalid input. Please enter a valid number.")
+
+                        while not (card_index in legal_indices):
+                            # predicting the action to take
+                            card_index = input(
+                                f"Invalid index (possible indices are {legal_indices}). Try again")
+
+                        action = [0] * 12
+                        action[card_index] = 1
+                    else:
+                        # update the state of the current player to get the open cards
+                        states[current_player, -1] = env.update_state(states[current_player, -1])
+
+                        # predicting the action to take
+                        action_pred = get_action(model,
+                                                 states[current_player],
+                                                 actions[current_player],
+                                                 rewards[current_player],
+                                                 target_return[current_player],
+                                                 timesteps)
+
+                        actions_pred_eval[current_player][-1] = action_pred
+
+                        action = action_pred.detach().numpy()
+
+                        # action_pred are already soft-maxed and valid actions,
+                        # we only need to prevent the argmax from choosing an all 0 action
+                        if torch.sum(action_pred) != 0:
+                            # get the index of the card with the highest probability
+                            card_index = np.argmax(action)
+
+                            # only select the best card
+                            action[:] = 0
+                            action[card_index] = 1
+
+                            print(f"Player {current_player} plays {env.game.players[i].cards[card_index]}")
+                        else:
+                            card_index = -1
+                            print(f"Player {current_player} does not play a card.")
+
+                    actions[current_player][-1] = Tensor(action)
+
+                    acting_player = current_player
+
+                    # interact with the environment based on this action
+                    # reward_player is a tuple of the trick winner and reward to propagate it
+                    # current_player is used to correctly iterate over the states in the order of play
+                    state, reward_player, done, current_player = env.online_step(card_index, current_player)
+
+                    # cur_state = torch.cat([cur_state, torch.from_numpy(state).reshape(1, state_dim)])
+                    cur_state[acting_player] = state
+
+                # states[current_player] = torch.cat([states[current_player], cur_state], dim=0)
+                rewards[reward_player[0]][-1] = reward_player[1]
+
+                pred_return = target_return[reward_player[0], -1] - (rewards[reward_player[0]][-1] / scale)
+                cur_pred_return = torch.cat([cur_pred_return, pred_return.reshape(1, 1)])
+
+            if t >= 2:
+                print(f"Trick {t+1} was won by {env.game.trick.leader.id}. "
+                      f"Cards were {env.game.trick.leader.trick_stack[t-1]}")
+
+            # update all states after each trick for the hand cards, score and last_trick
+            target_return = torch.cat([target_return, cur_pred_return], dim=1)
+            cur_state = torch.from_numpy(cur_state).reshape(3, 1, state_dim)
+            states = torch.cat([states, cur_state], dim=1)
+            timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
+
+        print(f"\nFinished game {j}\n"
+              f"\nYour final card points are: {env.game.players[human_player_id].sum_trick_values()}"
+              f"\nYour game points {rewards[human_player_id][-1]}")
+        
+        # add to the scores of the players
+        list_points[human_player_start] += rewards[(human_player_id - j) % 3][-1]
+        list_points[(human_player_start + 1) % 3] += rewards[(human_player_id - j + 1) % 3][-1]
+        list_points[(human_player_start + 2) % 3] += rewards[(human_player_id - j + 2) % 3][-1]
+        
+    return model
+
+
 def file_check(rel_path: str):
     # check whether the pre-trained model file exists
     from os.path import exists
@@ -1279,9 +1584,10 @@ if __name__ == '__main__':
                              'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
                              ' contradictory.')
     parser.add_argument('--games', type=int, default=(0, 10), nargs="+",
-                        help='the games to load')
+                        help='The games to load. Note that if this value surpasses 10 000, the game ids are ignored '
+                             'and the games are randomly loaded from a dataset.')
     parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
-                        help='get the game from the amount of perspectives.'
+                        help='Get the game from the amount of perspectives.'
                              'Note that the dataset will be split into test and train,',
                         choices=[(0, 1, 2), (0, 1), 0])  # choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])
     parser.add_argument('--point_rewards', type=bool, default=True,
@@ -1305,18 +1611,25 @@ if __name__ == '__main__':
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
     parser.add_argument('--logging_steps', type=int, default=20)
-    parser.add_argument('--pretrained_model', type=file_check, default="games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
+    parser.add_argument('--pretrained_model', type=file_check,
+                        default="games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
     parser.add_argument('--eval_in_training', type=bool, default=True,
                         help="Whether to evaluate during training. Slows down training if activated."
                              "Evaluation takes place on the test portion of the dataset (#_games_to_load * 0.2).")
-    parser.add_argument('--online_eval', type=bool, default=False,
-                        help="Uses a pre-trained model to play online against itself.")
+    parser.add_argument('--online_eval', type=bool, default=True,
+                        help="Uses a pre-trained model to play online against itself."
+                             " Rules out further training and evaluation of model.")
+    parser.add_argument('--play_as', type=int, default=0, choices=[0, 1, 2],
+                        help='If you want to play against the AI, provide your position. Player 0 is starting.'
+                             'Play with two pre-trained agents. Rules out training and evaluation of model.')
 
     args = vars(parser.parse_args())
 
-    if args['online_eval']:
-        run_online_dt(args)
+    if not args['play_as'] is None:
+        play_with_two(args)
+    elif args['online_eval']:
+        run_online_eval(args)
     else:
         run_training(args)

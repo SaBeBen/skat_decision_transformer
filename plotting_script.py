@@ -75,9 +75,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Convert tensorboard data to csv.')
 
     run_ids = ["20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_00-02-44_2023",
-               "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023"]
+               "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
+               "games_0-50000-encoding_one-hot-point_rewards_True-card_put-pure_loss-gas--Thu_Sep__7_10-29-38_2023",
+               "games_0-20000-encoding_one-hot-point_rewards_True-card_put-pure_loss-gas-Thu_Sep__7_00-55-38_2023",
+               "games_0-20000-encoding_one-hot-point_rewards_True-card_put-pure_loss-gas-Thu_Sep__7_12-23-54_2023"]
 
-    tags = ["train/tr_loss", "train/probability_of_correct_action", "train/loss"]
+    tags = ["train/tr_loss", "train/probability_of_correct_action", "train/loss", "eval/prob_correct_action",
+            "eval/loss: "]
 
     parser.add_argument(
         "--run_ids", type=str, nargs="+", default=run_ids,

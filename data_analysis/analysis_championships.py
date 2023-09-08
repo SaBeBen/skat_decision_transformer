@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 
 
 # "IDGame" of the first 20 games, can be searched in https://skatarchiv.skat-spielen.de/ for a better view of the game
+
 # 8x619M13Bx36
+
 # 8x619M13BxQH
 # 8x619M13Bx3U
 
@@ -17,7 +19,9 @@ import matplotlib.pyplot as plt
 # 8x619M13Bx30
 # 8x619M13Bx32
 # 8x619M13Bx9S
+
 # 8x619M13Bx3B
+
 # 8x619M13Bx3X
 # 8x619M13Bx9V
 # 8x619M13Bx99

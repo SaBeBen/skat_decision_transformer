@@ -45,6 +45,9 @@ class Player:
     def get_id(self):
         return self.id
 
+    def get_role(self):
+        return self.type
+
     def __repr__(self):
         return "id=" + str(id) + "name=" + self.name + " cards=" + str(self.cards)
 

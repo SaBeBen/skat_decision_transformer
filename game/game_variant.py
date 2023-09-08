@@ -41,6 +41,9 @@ class GameVariant(metaclass=ABCMeta):
     def get_level(self):
         raise NotImplementedError()
 
+    def get_variant_name(self):
+        raise NotImplementedError()
+
 
 # ------------------------------------------------------------
 # Concrete game variant class for grand game
@@ -97,6 +100,9 @@ class GameVariantGrand(GameVariant):
     def get_level(self):
         return self.ouvert + self.schwarz_called + self.scheider_called + self.hand
 
+    def get_variant_name(self):
+        return "Grand"
+
 
 # ------------------------------------------------------------
 # Concrete game variant class for suit game
@@ -120,7 +126,7 @@ class GameVariantSuit(GameVariantGrand):
             return GameVariantGrand.compare_cards(self, card_higher, card_lower)
 
     def is_trump(self, card):
-        return card.suit.name is self.trump_suit or card.face is Card.Face.JACK
+        return card.suit is self.trump_suit or card.face is Card.Face.JACK
 
     def has_trump(self, player):
         return player.has_face(Card.Face.JACK) or player.has_suit(self.trump_suit)
@@ -130,6 +136,9 @@ class GameVariantSuit(GameVariantGrand):
 
     def get_level(self):
         return self.peaks + self.ouvert + self.schwarz_called + self.scheider_called + self.hand
+
+    def get_variant_name(self):
+        return self.trump_suit.name
 
 
 # ------------------------------------------------------------
@@ -175,3 +184,6 @@ class GameVariantNull(GameVariant):
             return 46
         else:
             return 23
+
+    def get_variant_name(self):
+        return "Null"
