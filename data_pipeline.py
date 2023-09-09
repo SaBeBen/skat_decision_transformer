@@ -81,7 +81,7 @@ def get_game(championship="wc",
     # e.g. GameID544205 and IDGame 8xIN8X3LIMxICPx (for "Skat-Archiv")
     # only rules out 0.19 % of the games in wc (see analysis)
     skat_game_data = skat_game_data[(skat_game_data["AllPassed"] == 0)
-                                    | (skat_game_data["Miscall"] == 0)]
+                                    & (skat_game_data["Miscall"] == 0)]
 
     if not include_surr:
         skat_game_data = skat_game_data[(skat_game_data["Surrendered"] == 0)]

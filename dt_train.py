@@ -88,7 +88,6 @@ def run_training(args):
     else:
         print("\nLoading data...")
         data, _, first_states, meta_and_cards, actions_table, skat_and_cs = data_pipeline.get_states_actions_rewards(
-            # first_states, meta_and_cards, actions_table, skat_and_cs
             championship=championship,
             games_indices=games_to_load,
             point_rewards=point_rewards,
@@ -180,14 +179,10 @@ def run_training(args):
     print(f"\nTraining on games {games_to_load.start, games_to_load.stop} with {hand_encoding} encoding...")
     trainer.train()
 
-    # and loading it again
-    # pretrained_model = TrainableDT.from_pretrained("./pretrained_models")
-    # trainer.model = pretrained_model
+    if save_model:
+        model.save_pretrained(rf"./pretrained_models/{dir_name}")
 
-    # if save_model:
-    #     model.save_pretrained(rf"./pretrained_models/{dir_name}")
-
-    # training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 10
+    # training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 50
     #
     # trainer.data_collator = DecisionTransformerSkatDataCollator(dataset["test"])
     #
@@ -195,14 +190,13 @@ def run_training(args):
     #
     # print(evaluation_results)
 
-    # first_states = dataset['test']['states'][]
-    if not load_dataset:
-        evaluate_in_env(model, point_rewards, state_dim,
-                        card_enc=hand_encoding,
-                        first_states=first_states,
-                        meta_and_cards_game=meta_and_cards,
-                        skat_and_cs=skat_and_cs,
-                        correct_actions=actions_table)
+    # if not load_dataset:
+    #     evaluate_in_env(model, point_rewards, state_dim,
+    #                     card_enc=hand_encoding,
+    #                     first_states=first_states,
+    #                     meta_and_cards_game=meta_and_cards,
+    #                     skat_and_cs=skat_and_cs,
+    #                     correct_actions=actions_table)
 
 
 # ------------------------------------------------------------------------------------
@@ -245,22 +239,6 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     return action_preds[0, -1]
 
 
-# def training_loop(num_epochs, num_batches, optimizer, collator: DecisionTransformerSkatDataCollator):
-#     for epoch in range(num_epochs):
-#         for _ in range(num_batches):
-#             # state = env.reset(current_player_id=current_player)
-#             batch = collator.__call__()
-#             action_target = x
-#
-#             action_pred = get_action(model, )
-#
-#             # Backpropagation
-#             optimizer.zero_grad()
-#             loss.backward()
-#             # Optimisation
-#             optimizer.step()
-
-
 def evaluate_in_env(model: TrainableDT,
                     point_reward: bool,
                     state_dim: int,
@@ -268,9 +246,10 @@ def evaluate_in_env(model: TrainableDT,
                     first_states: List[np.ndarray],
                     meta_and_cards_game: List[np.ndarray],
                     skat_and_cs: List[np.ndarray],
-                    correct_actions: List) -> None:
+                    correct_actions: List,
+                    eval_steps: int = 50) -> None:
     """
-    Less efficient manual evaluation, actually plays Skat in background:
+    Less efficient, basic manual evaluation, actually plays Skat in background:
 
     This evaluation guides the agent through a game.
     If another card than in the data was played, the course of the game would shift,
@@ -278,13 +257,17 @@ def evaluate_in_env(model: TrainableDT,
     eventually play other cards, as the distribution of suits on the hand changes.
     """
 
+    print("Manual evaluation started...")
+
     scale = 1
 
     amount_games = math.floor(len(first_states) / 3)
 
     correct_actions_idx = np.argmax(correct_actions, axis=2)
 
-    for game_idx in range(amount_games):
+    eval_loss = 0
+
+    for game_idx in tqdm(range(amount_games)):
 
         for current_player in range(3):
             game_and_pl_idx = 3 * game_idx + current_player
@@ -363,13 +346,16 @@ def evaluate_in_env(model: TrainableDT,
                 action[card_index] = 1
 
                 action_target_idx = correct_actions_idx[game_and_pl_idx][t]
-                card_pred = env.current_player.cards[card_index]
-                card_target = env.current_player.cards[action_target_idx]
 
                 if card_index != action_target_idx:
+                    if card_index >= len(env.current_player.cards):
+                        print(f"Predicted card index {card_index} should "
+                              f"not exceed length of cards {len(env.current_player.cards)}!\n "
+                              f"Use the masked version or do not evaluate manually.")
+
                     # put card from targets, if agent wants to select other
                     action = correct_actions[game_and_pl_idx][t]
-                    print(f"Agent wanted to select {card_pred}, but target is {card_target}")
+                    # print(f"Agent wanted to select {card_pred}, but target is {card_target}")
 
                 actions[-1] = Tensor(action)
 
@@ -377,8 +363,6 @@ def evaluate_in_env(model: TrainableDT,
                 # reward_player is a tuple of the trick winner and her reward,
                 # else there are difficulties with reward assignment
                 state, reward, done = env.step(tuple(action))
-
-                # print(f"Reward {t}: {reward}")
 
                 cur_state = torch.from_numpy(state).reshape(1, state_dim)
                 states = torch.cat([states, cur_state], dim=0)
@@ -407,8 +391,13 @@ def evaluate_in_env(model: TrainableDT,
                     nll_loss = nll_fct(torch.log(actions_preds),
                                        torch.argmax(action_targets, dim=1))
 
-                    # log
-                    print(f"Loss of game {game_and_pl_idx}: {nll_loss}")
+                    eval_loss += nll_loss
+
+                    if eval_steps % (game_idx*3) == 0:
+                        eval_loss = eval_loss / eval_steps
+                        # log
+                        print(f"Evaluation Loss: {eval_loss}")
+                        eval_loss = 0
 
                     break
 
@@ -674,13 +663,13 @@ def play_with_two_agents(model,
 
     # initialise s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
-    
+
     # The list points for the human player and the two agents
     list_points = [0, 0, 0]
 
     for j in tqdm(range(amount_games)):
         env = Env(card_enc)
-        
+
         # rotate position of human player
         human_player_id = (human_player_start + j) % 3
 
@@ -912,8 +901,8 @@ def play_with_two_agents(model,
                 cur_pred_return = torch.cat([cur_pred_return, pred_return.reshape(1, 1)])
 
             if t >= 2:
-                print(f"Trick {t+1} was won by {env.game.trick.leader.id}. "
-                      f"Cards were {env.game.trick.leader.trick_stack[t-1]}")
+                print(f"Trick {t + 1} was won by {env.game.trick.leader.id}. "
+                      f"Cards were {env.game.trick.leader.trick_stack[t - 1]}")
 
             # update all states after each trick for the hand cards, score and last_trick
             target_return = torch.cat([target_return, cur_pred_return], dim=1)
@@ -924,12 +913,12 @@ def play_with_two_agents(model,
         print(f"\nFinished game {j}\n"
               f"\nYour final card points are: {env.game.players[human_player_id].sum_trick_values()}"
               f"\nYour game points {rewards[human_player_id][-1]}")
-        
+
         # add to the scores of the players
         list_points[human_player_start] += rewards[(human_player_id - j) % 3][-1]
         list_points[(human_player_start + 1) % 3] += rewards[(human_player_id - j + 1) % 3][-1]
         list_points[(human_player_start + 2) % 3] += rewards[(human_player_id - j + 2) % 3][-1]
-        
+
     return model
 
 
@@ -959,7 +948,7 @@ if __name__ == '__main__':
                         help='dataset of championship to select from. '
                              'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
                              ' contradictory.')
-    parser.add_argument('--games', type=int, default=(0, 10), nargs="+",
+    parser.add_argument('--games', type=int, default=(0, 60), nargs="+",
                         help='The games to load. Note that if this value surpasses 10 000, the game ids are ignored '
                              'and the games are randomly loaded from a dataset.')
     parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
