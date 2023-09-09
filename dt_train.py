@@ -29,7 +29,6 @@ from dt_trainer import TrainableDT, DTTrainer
 from environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
 
 
-# %%
 # def set_memory_limit(limit_gb):
 #     limit_bytes = limit_gb * 1024 * 1024 * 1024  # Convert MB to bytes
 #     resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
@@ -166,7 +165,7 @@ def run_training(args):
     if eval_in_training:
         training_args.do_eval = True
         training_args.evaluation_strategy = "steps"
-        training_args.eval_steps = 100
+        training_args.eval_steps = 1000
 
     trainer = DTTrainer(  # CustomDTTrainer
         model=model,
@@ -393,7 +392,7 @@ def evaluate_in_env(model: TrainableDT,
 
                     eval_loss += nll_loss
 
-                    if eval_steps % (game_idx*3) == 0:
+                    if eval_steps % (game_idx * 3) == 0:
                         eval_loss = eval_loss / eval_steps
                         # log
                         print(f"Evaluation Loss: {eval_loss}")
@@ -407,10 +406,29 @@ def run_online_eval(args):
     championship = args['championship']
     hand_encoding = args['hand_encoding']
     point_rewards = args['point_rewards']
+    perspective = args['perspective']
+    games_to_load = slice(args['games'][0], args['games'][1])
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
     pretrained_model = TrainableDT.from_pretrained(
         f"./pretrained_models/games_0-50000-encoding_one-hot-point_rewards_True-Mon_Sep__4_23-48-24_2023")
+
+    print(f"Model has state dimension of {pretrained_model.config.state_dim}")
+
+    # load_dataset = games_to_load.stop == -1 or games_to_load.stop - games_to_load.start >= 10000
+    # if load_dataset:
+    #     # "wc-without_surr_and_passed-pr_True-one-hot"
+    #     dataset = load_from_disk(f"./datasets/wc-without_surr_and_passed-pr_{point_rewards}-{hand_encoding}-card_put")
+    #     amount_games = (games_to_load.stop - games_to_load.start) * 3  # * 3 for every perspective
+    #     dataset['test'] = Dataset.from_dict(dataset['test'][:math.floor(amount_games * 0.2)])
+    # else:
+    print("\nLoading data...")
+    data, _, first_states, meta_and_cards, actions_table, skat_and_cs = data_pipeline.get_states_actions_rewards(
+        championship=championship,
+        games_indices=games_to_load,
+        point_rewards=point_rewards,
+        perspective=perspective,
+        card_enc=hand_encoding)
 
     pretrained_model.config.state_dim = state_dim
 
@@ -418,56 +436,29 @@ def run_online_eval(args):
                       point_reward=point_rewards,
                       state_dim=state_dim,
                       card_enc=hand_encoding,
-                      amount_games=10
+                      amount_games=10,
+                      meta_and_cards=meta_and_cards,
+                      first_game_states=first_states
                       )
 
 
-def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games, first_game_states=None):
+def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games,
+                      meta_and_cards=None,
+                      first_game_states=None):
     scale = 1
-
-    # env = environment.Env() if one_game is None else one_game
 
     # initialise s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
 
-    # accelerator = Accelerator(gradient_accumulation_steps=1)
-    # optimiser = torch.optim.Adam(model.config)
-    # model = accelerator.prepare_model(model)
+    # The list points for the three agents
+    list_points = [0, 0, 0]
 
-    # current_time = time.asctime().replace(':', '-').replace(' ', '_')
-    #
-    # dir_name = rf"online_training-episodes_{amount_games}-point_rewards_{point_reward}-{current_time}"
-    #
-    # logging_dir = rf"./training-logs/{dir_name}"
-    #
-    # training_args = TrainingArguments(
-    #     report_to=["tensorboard"],
-    #     output_dir="online_training_output/",
-    #     remove_unused_columns=False,
-    #     num_train_epochs=240,
-    #     per_device_train_batch_size=32,
-    #     per_device_eval_batch_size=32,
-    #     gradient_accumulation_steps=4,
-    #     optim="adamw_torch",
-    #     max_grad_norm=0.1,
-    #     logging_steps=50,
-    #     logging_dir=logging_dir,
-    #     save_steps=5000
-    # )
-    #
-    # trainer = DTTrainer(  # CustomDTTrainer
-    #     model=model,
-    #     args=training_args
-    # )
-    #
-    # trainer.training_step(model)
-
-    for _ in tqdm(range(amount_games)):
-        # TODO: rotate players after game
+    for j in tqdm(range(amount_games)):
         env = Env(card_enc)
 
-        # build the environment for the evaluation
-        states = env.online_reset()
+        games_idx = slice(3 * j, 3 * j + 3)
+        # build the environment for the evaluation by passing every perspective
+        states = env.online_reset(meta_and_cards[j], first_game_states[games_idx])
 
         target_return = [0] * 3
 
@@ -485,18 +476,22 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games, fi
                         base_value = 9 + env.trump_enc.index(1)
 
                     level = 1 + env.game.game_variant.get_level()
-                    target_return[pl] = level * base_value * 2
+                    target_return[pl] = level * base_value
 
                 if env.game.players[pl] == env.game.get_declarer():
-                    target_return[pl] += 120 * 0.1 + target_return[pl] * 0.9
+                    # Seeger-Fabian score gives declarer points for winning.
+                    # combination of dense reward (card points ~ 120) and sparse (game points)
+                    # the discount is applied to prevent reward hacking
+                    # double it for possibly improved behaviour as in DT paper
+                    target_return[pl] += (120 * 0.1 + target_return[pl] * 0.9) * 2
                 else:
-                    # Seeger Score gives defenders points for winning.
+                    # Seeger-Fabian score gives defenders points for winning.
                     # We only play as 3 players -> 40 points if won as defender
-                    target_return[pl] += 120 * 0.1 + 40 * 0.9
+                    # also, the discount is applied to prevent reward hacking
+                    target_return[pl] += (120 * 0.1 + 40 * 0.9) * 2
             else:
-                # if the reward are only the card points
+                # if the reward are only the card points, set it
                 target_return[pl] = 2 * 120
-        # target_return = 2 * 120
 
         target_return = torch.tensor(target_return).float().reshape(3, 1)
         states = torch.from_numpy(states).reshape(3, 1, state_dim).float()
@@ -505,7 +500,7 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games, fi
         rewards = torch.zeros(3, 0).float()
         timesteps = torch.tensor(0).reshape(1, 1).long()
 
-        # take steps in the environment (evaluation, not training)
+        # take steps in the game
         for t in range(12):
             # add zeros for actions as input for the current time-step
             actions = torch.cat([actions, torch.zeros((3, 1, ACT_DIM))], dim=1)
@@ -528,6 +523,8 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games, fi
                     current_player = i
 
                     state = states[current_player, -1]
+
+                    # cannot get reward in Skat putting when defende
                     reward_player = [current_player, 0]
 
                     action_pred = get_action(model,
@@ -547,12 +544,16 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games, fi
                     # cur_state = torch.cat([cur_state, state.reshape(1, state_dim)])
                     cur_state[current_player] = state
 
-                else:
-                    # start at the first seat, at the player besides the dealer
-                    # if (t == 2) and (i == 0):
-                    #     current_player = env.game.get_first_seat().id
+                    current_player = (current_player + 1) % 3
 
-                    current_player = env.game.trick.get_current_player()
+                else:
+                    # start at the first seat, at the player besides the dealer (fore-hand starts every game)
+                    if (t == 2) and (i == 0):
+                        current_player = env.game.trick.get_current_player().id
+
+                    # for Skat putting, only the declarer can act
+                    if t < 2:
+                        current_player = env.game.get_declarer().id
 
                     # update the state of the current player to get the open cards
                     states[current_player, -1] = env.update_state(states[current_player, -1])
@@ -590,44 +591,53 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games, fi
                     # current_player is used to correctly iterate over the states in the order of play
                     state, reward_player, done, current_player = env.online_step(card_index, current_player)
 
+                    if reward_player[0] != env.game.get_declarer().id:
+                        # if trick winner is defender, also give the reward to the other defender
+                        if env.game.players[(reward_player[0] + 1) % 3] != env.game.get_declarer():
+                            rewards[(reward_player[0] + 1) % 3][-1] = reward_player[1]
+                        else:
+                            rewards[(reward_player[0] + 2) % 3][-1] = reward_player[1]
+
                     # cur_state = torch.cat([cur_state, torch.from_numpy(state).reshape(1, state_dim)])
                     cur_state[acting_player] = state
 
                 # states[current_player] = torch.cat([states[current_player], cur_state], dim=0)
                 rewards[reward_player[0]][-1] = reward_player[1]
 
-                pred_return = target_return[reward_player[0], -1] - (rewards[reward_player[0]][-1] / scale)
-                cur_pred_return = torch.cat([cur_pred_return, pred_return.reshape(1, 1)])
+            cur_pred_return = target_return[:, -1] - rewards[:, -1] / scale
+            target_return = torch.cat([target_return, cur_pred_return.reshape(3, 1)], dim=1)
 
             # update all states after each trick for the hand cards, score and last_trick
-            target_return = torch.cat([target_return, cur_pred_return], dim=1)
+            # target_return = torch.cat([target_return, cur_pred_return], dim=1)
             cur_state = torch.from_numpy(cur_state).reshape(3, 1, state_dim)
             states = torch.cat([states, cur_state], dim=1)
             timesteps = torch.cat([timesteps, torch.ones((1, 1)).long() * (t + 1)], dim=1)
 
-            # TODO: loss and backward propagation
-
         for current_player in range(3):
-            # for evaluation of unspecific games
-            diff_target_reached = torch.sub(target_return[current_player, 0], target_return[current_player, -1])
 
-            # MSE loss
-            loss = diff_target_reached ** 2
+            # get game_points for everybody and include final trick
+            # final trick cannot be fully evaluated in loop
+            _, last_reward, game_points = env.finish_online_game(current_player)
+            rewards[current_player][-1] += last_reward
+
+            # give points to the players.
+            # As the environment is reset after each game, the game does not rotate itself.
+            # we effectively do this by rotating the rewards with a fix point on the list points
+            list_points[current_player] += torch.sum(rewards[(current_player + j) % 3])
+
+            # target return is not list points! get list points from meta and cards
+            achieved_points_in_data = meta_and_cards[j][-5]
 
             if env.game.get_declarer().id == current_player:
-                print(f"{env.game.get_declarer()} achieved a score of {rewards[current_player]}")
+                print(f"\nPlayer {env.game.get_declarer().id} achieved a score of {game_points} as declarer.")
+                print(f"\nIn the championship the same position with this starting configuration achieved "
+                      f"{achieved_points_in_data}")
+            else:
+                print(f"\nPlayer {env.game.get_declarer().id} achieved a score of {game_points}")
 
-            # model.zero_grad()
 
-            mse_loss = torch.nn.MSELoss()
-            loss = mse_loss(target_return[current_player, 0], target_return[current_player, -1])
-            # accelerator.backward(loss)
-
-            print(
-                f"Difference of target reward and reached reward of player {current_player}: {diff_target_reached}")
-
-    # return trained model
-    return model
+    # return list points
+    return list_points
 
 
 def play_with_two(args):
@@ -809,9 +819,7 @@ def play_with_two_agents(model,
                 else:
                     # start at the first seat, at the player besides the dealer
                     # if (t == 2) and (i == 0):
-                    #     current_player = env.game.get_first_seat().id
-
-                    current_player = env.game.trick.get_current_player()
+                    current_player = env.game.trick.get_current_player().id
 
                     # update the state of the current player to get the open cards
                     states[current_player, -1] = env.update_state(states[current_player, -1])
@@ -841,7 +849,7 @@ def play_with_two_agents(model,
                         card_index = -1
                         card_index = input(
                             f"Which card do you want to select?"
-                            f"\nPossible indices are {legal_indices}")
+                            f"\nPossible indices are {np.arange(12-t)}")
                         try:
                             card_index = int(card_index)
                         except ValueError:
@@ -901,8 +909,9 @@ def play_with_two_agents(model,
                 cur_pred_return = torch.cat([cur_pred_return, pred_return.reshape(1, 1)])
 
             if t >= 2:
+                last_trick = [entry[1] for entry in env.game.trick.leader.trick_stack[t - 1]]
                 print(f"Trick {t + 1} was won by {env.game.trick.leader.id}. "
-                      f"Cards were {env.game.trick.leader.trick_stack[t - 1]}")
+                      f"Cards were {last_trick}")
 
             # update all states after each trick for the hand cards, score and last_trick
             target_return = torch.cat([target_return, cur_pred_return], dim=1)
@@ -948,7 +957,7 @@ if __name__ == '__main__':
                         help='dataset of championship to select from. '
                              'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
                              ' contradictory.')
-    parser.add_argument('--games', type=int, default=(0, 60), nargs="+",
+    parser.add_argument('--games', type=int, default=(50000, 50100), nargs="+",
                         help='The games to load. Note that if this value surpasses 10 000, the game ids are ignored '
                              'and the games are randomly loaded from a dataset.')
     parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
@@ -975,9 +984,9 @@ if __name__ == '__main__':
     parser.add_argument('--save_model', type=bool, default=False,
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
-    parser.add_argument('--logging_steps', type=int, default=20)
+    parser.add_argument('--logging_steps', type=int, default=100)
     parser.add_argument('--pretrained_model', type=file_check,
-                        default="games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
+                        # default="games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
     parser.add_argument('--eval_in_training', type=bool, default=True,

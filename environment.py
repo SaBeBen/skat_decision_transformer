@@ -419,7 +419,7 @@ class Env:
             idx = pos_p.index(-1)
             return self.game.players[idx]
 
-    def get_game_points(self):
+    def get_game_points(self, current_player):
         # Seeger-Fabian score
         if sum(self.trump_enc) == 0:
             # if null is played, the game_points are directly inferred
@@ -440,13 +440,30 @@ class Env:
                 # suit value
                 base_value = 9 + self.trump_enc.index(1)
 
-            # includes "with" and "without" for suit games
+            # 1 for game, get_level includes "with" and "without" for suit games
             level = 1 + self.game.game_variant.get_level()
 
-            if self.game.has_declarer_won() and self.current_player == self.game.get_declarer():
-                # add 50 points for winning
-                game_points = base_value * level + 50
-            elif not self.game.has_declarer_won() and self.current_player != self.game.get_declarer():
+            if current_player == self.game.get_declarer():
+                if self.game.has_declarer_won():
+                    if current_player.sum_trick_values() >= 90:
+                        # extra level for Schneider
+                        level += 1
+                        if current_player.sum_trick_values() == 120:
+                            # extra level for Schwarz
+                            level += 1
+                    # add 50 points for winning
+                    game_points = base_value * level + 50
+                else:
+                    # if declarer lost
+                    if current_player.sum_trick_values() <= 30:
+                        # extra level for Schneider lost
+                        level += 1
+                        if current_player.sum_trick_values() == 0:
+                            # extra level for Schwarz lost
+                            level += 1
+                    # ...deduct double the declared points and a malus of 50
+                    game_points = base_value * level * (-2) - 50
+            elif not self.game.has_declarer_won() and current_player != self.game.get_declarer():
                 # we only consider a game of three players
                 game_points = 40
             else:
@@ -540,12 +557,13 @@ class Env:
 
             current_player.cards.sort()
 
-        return reward
+        # according to discount
+        return reward * 0.1
 
     def finish_game(self, reward: int):
         if self.current_player.type != Player.Type.DECLARER:
             self.score[1] += Card.get_value(self.game.skat[0]) + Card.get_value(self.game.skat[1])
-        game_points = self.get_game_points()
+        game_points = self.get_game_points(self.current_player)
 
         if self.hand:
             # add reward in hand game of two unseen Skat cards
@@ -709,8 +727,10 @@ class Env:
         # Return state, reward, done
         return np.array(game_state), reward, done
 
-    def online_reset(self, meta_and_cards_game=None, game_first_states=None):
+    def online_reset(self, meta_and_cards_game=None, game_first_states=None, point_rewards=True):
         self.game.reset()
+
+        self.point_rewards = point_rewards
 
         self.state_machine = GameStateMachine(GameStateStart(self.game))
 
@@ -721,32 +741,41 @@ class Env:
             current_player_id = 1
 
             initialise_hand_cards(meta_and_cards_game,
-                                  self.game.players[current_player_id + 1 % 3],
-                                  self.game.players[current_player_id + 1 % 3],
-                                  self.game.players[current_player_id + 2 % 3])
+                                  self.game.players[current_player_id],
+                                  self.game.players[(current_player_id + 1) % 3],
+                                  self.game.players[(current_player_id + 2) % 3])
 
             self.game.skat = [convert_numerical_to_card(meta_and_cards_game[34]),
                               convert_numerical_to_card(meta_and_cards_game[35])]
 
+            self.pos_p = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
             # has to be adjusted if changing the data pipeline
-            self.pos_p = list(game_first_states[:3])
+            for i in range(3):
+                self.pos_p[i] = list(game_first_states[i][:3])
 
             # should be 0, introduced for
-            self.score = list(game_first_states[4:6])
+            # self.score = list(game_first_states[4:6])
 
-            self.trump_enc = list(game_first_states[6:10])
+            self.trump_enc = list(game_first_states[0][6:10])
 
             game_states = game_first_states
 
-            soloist = self.get_declarer_from_pos(self.pos_p)
+            soloist = self.get_declarer_from_pos(self.pos_p[0])
 
             self.hand = meta_and_cards_game[-11]
 
             self.game.game_variant = get_game_variant(self.trump_enc, soloist.cards)
 
+            self.last_trick, self.open_cards = [], []
+
             suit = Card.Suit(self.trump_enc.index(1))
 
             self.game.game_variant = GameVariantSuit(trump_suit=suit)
+
+            self.state_machine.handle_action(BidCallAction(soloist, 18))
+            self.state_machine.handle_action(
+                BidPassAction(self.game.players[(soloist.get_id() + 1) % 3], 18))  # id starts at 0
+            self.state_machine.handle_action(BidPassAction(self.game.players[(soloist.get_id() + 2) % 3], 18))
 
             if not self.hand:
                 self.state_machine.handle_action(PickUpSkatAction(soloist))
@@ -839,9 +868,6 @@ class Env:
         # the game is finished after 10 rounds
         done = (self.game.round == 10)
 
-        # current_player = self.game.trick.get_current_player()
-        next_player_id = (current_player_id + 1) % 3
-
         # if the Skat is put or in hand game for the first two actions, no card should be played
         if card_index == -1:
 
@@ -867,6 +893,9 @@ class Env:
             else:
                 # wait for the declarer's signal
                 put_card = [0]
+
+            # select next player to rotate during skat putting
+            next_player_id = (current_player_id + 1) % 3
 
         else:
             put_card = [1]
@@ -947,8 +976,9 @@ class Env:
             padded_last_trick = self.last_trick + [0] * (3 * self.card_dim - len(self.last_trick))
             padded_open_cards = self.open_cards + [0] * (2 * self.card_dim - len(self.open_cards))
 
-        if done:
-            reward = self.finish_online_game(current_player_id, reward[1])
+        # if done:
+        #     # finish the game. This is called for each player through the loop in the function above
+        #     reward = self.finish_online_game(current_player_id)
 
         if self.game.get_declarer().get_id() == current_player_id:
             score = self.online_score[0]
@@ -979,19 +1009,28 @@ class Env:
 
         # update last trick if Skat is put and open cards in each turn
         if self.skat_put[1]:
-            game_state[11:47] = padded_last_trick
+            game_state[10:46] = padded_last_trick
 
-        game_state[47:71] = padded_open_cards
+        game_state[46:70] = padded_open_cards
 
         return torch.from_numpy(game_state)
 
-    def finish_online_game(self, current_player_id, reward):
+    def finish_online_game(self, current_player_id):
+        """
+        :param current_player_id: current player to evaluate game end for.
+        :return: player receiving points and discounted list points
+        """
         if current_player_id != self.game.get_declarer().id:
             skat_points = Card.get_value(self.game.skat[0]) + Card.get_value(self.game.skat[1])
-            # add missing points from Skat
-            self.online_score[1][0] += skat_points
+            if sum(self.online_score[1]) != 120:
+                # add missing points from Skat
+                self.online_score[1][1] += skat_points
 
-        game_points = self.get_game_points()
+        current_player = self.game.players[current_player_id]
+
+        reward = current_player.current_trick_points
+
+        game_points = self.get_game_points(current_player)
 
         if current_player_id == self.game.get_declarer().id and game_points != 0:
             if self.hand:
@@ -1006,10 +1045,11 @@ class Env:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games
                 reward *= 1 if game_points > 0 else 0
         else:
-            if game_points != 0:
-                reward += 0.9 * 40 + reward * 0.1
+            if game_points == 40:
+                # if defender won
+                reward += 0.9 * game_points + reward * 0.1
 
-        return current_player_id, reward
+        return current_player_id, reward, game_points
 
     def set_current_player(self, player):
         self.current_player = player

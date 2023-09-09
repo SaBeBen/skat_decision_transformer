@@ -67,7 +67,8 @@ def get_game(championship="wc",
                               "PlayerPosAtTableMH", "PlayerPosAtTableRH"]
 
     # GameID (0), PlayerFH (6), PlayerMH (7), PlayerRH (8), Card1 (9):Card30 (38), Card31 (39): Card32 (40) = Skat,
-    # PlayerID (44), Game (45), Hand(48), PointsPlayer (54), Won (55), Miscall (56), AllPassed (58), Surrendered (59)
+    # PlayerID (44), Game (45), Hand (48), Schneider (49), SchneiderCalled (50), Schwarz (51), SchwarzCalled (52),
+    # Ouvert (53), PointsPlayer (54), Won (55), Miscall (56), AllPassed (58), Surrendered (59)
     # only needs cards of current player
     columns = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 48, 49, 50, 51, 52, 53, 54, 55, 56, 58, 59]
 
@@ -595,10 +596,10 @@ def get_states_actions_rewards(
                 # soloist_points are calculated by the extended Seeger and Fabian system
                 if current_player.type == Player.Type.DECLARER:
                     # add the points to the soloist
-                    rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1  # rewards[-1] + soloist_points
+                    rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1
                 elif env.game.has_declarer_won():
                     # give 40 discounted score points to the defenders after Fabian-Seeger score
-                    rewards[-1] = 0.9 * 40 + rewards[-1] * 0.1  # rewards[-1] + soloist_points
+                    rewards[-1] = 0.9 * 40 + rewards[-1] * 0.1
             else:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games
                 rewards[-1] *= 1 if won else 0

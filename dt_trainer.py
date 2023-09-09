@@ -136,6 +136,16 @@ class TrainableDT(DecisionTransformerModel):
         # put_card_mask = states[:, :, 3].bool()
         # action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
 
+        # sm = torch.nn.Softmax(dim=2)
+        # action_preds = sm(action_preds)
+
+        # action_targets_masked = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        # action_preds_masked = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        #
+        # nll_loss_fct = torch.nn.NLLLoss()
+        # loss_pure = nll_loss_fct(torch.log(action_preds_masked), torch.argmax(action_targets_masked, dim=1))
+        # loss = loss_pure
+
         # In the following, limiting behaviour is injected to set the rules of Skat.
         # This can be seen as a safety mechanism.
         # Masks are used to only allow legal actions.
@@ -218,10 +228,10 @@ class TrainableDT(DecisionTransformerModel):
         # positions we want to attend and the dtype's smallest value for masked positions.
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
-        # playable_cards = playable_cards.to(dtype=self.dtype)  # fp16 compatibility
-        # playable_cards = (1.0 - playable_cards) * torch.finfo(self.dtype).min
+        playable_cards = playable_cards.to(dtype=self.dtype)  # fp16 compatibility
+        playable_cards = (1.0 - playable_cards) * torch.finfo(self.dtype).min
 
-        possible_action_preds = playable_cards * action_preds
+        possible_action_preds = playable_cards + action_preds
 
         # mask all actions were no card can be played, 1 if it can be played, 0 if not
         # e.g. in Hand games, as defenders in first two tricks (or side effect: due to the attention_mask)
@@ -233,27 +243,51 @@ class TrainableDT(DecisionTransformerModel):
 
         # action_targets_masked = actions * put_card_mask.unsqueeze(2).repeat(1, 1, 12) * playable_cards
 
+        # put_card_mask = put_card_mask.unsqueeze(2).repeat(1, 1, 12).to(dtype=self.dtype)  # fp16 compatibility
+        # put_card_mask = (1.0 - put_card_mask) * torch.finfo(self.dtype).min
+
+        # TODO: comment when wanting to train without a mask
+        action_preds = possible_action_preds  # + put_card_mask
+
         # apply mask whether a card should be played based on game timestep
-        action_preds = possible_action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
+        # action_preds = possible_action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
 
-        sm = torch.nn.Softmax(dim=2)
-        action_preds = sm(action_preds)
-
-        action_targets_masked = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        action_preds_masked = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        # equal to target mask
+        # mask_wo_zeros = action_preds.sum(dim=1)
+        # mask_wo_zeros = mask_wo_zeros > 0
 
         # when argmax takes 0 actions it selects the first element as maximum -> there is no 1 -> inf loss
         # --> as the loss only looks at the ground truth, and we mask 0 actions, we throw out the 0 actions for the loss
-        mask_wo_zeros = action_targets_masked.sum(dim=1)
-        mask_wo_zeros = mask_wo_zeros > 0
+        # effectively the same as put_card_mask
+        # mask_wo_zeros = action_targets_masked.sum(dim=1)
+        # mask_wo_zeros = mask_wo_zeros > 0
+        #
+        # # mask the targets and preds
+        # targets_wo_zeros = action_targets_masked[mask_wo_zeros]
+        # preds_wo_zeros = action_preds_masked[mask_wo_zeros]
 
-        # mask the targets and preds
-        targets_wo_zeros = action_targets_masked[mask_wo_zeros]
-        preds_wo_zeros = action_preds_masked[mask_wo_zeros]
+        sm = torch.nn.Softmax(dim=2)
+        action_preds_output = sm(action_preds)
+
+        # more stable than sm + log
+        action_preds_ls = torch.nn.functional.log_softmax(action_preds, dim=2)
+
+        # produces NaNs
+        # action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
+        # produces NaNs
+        # action_mask = action_preds != 0
+        # comb_mask = action_mask * attention_mask.unsqueeze(2).repeat(1, 1, 12).bool()
+        # temp = action_preds[comb_mask]
+        # temp2 = actions[comb_mask]
+
+        action_targets_masked = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
+        action_preds_masked = action_preds_ls.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
 
         nll_loss_fct = torch.nn.NLLLoss()
-        loss_pure = nll_loss_fct(torch.log(preds_wo_zeros), torch.argmax(targets_wo_zeros, dim=1))
+        loss_pure = nll_loss_fct(action_preds_masked, torch.argmax(action_targets_masked, dim=1))
         loss = loss_pure
+
+        action_preds = action_preds_output * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
 
         # for evaluation and online training
         if not return_dict:
