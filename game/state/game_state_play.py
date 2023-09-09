@@ -1,7 +1,8 @@
 from exceptions import InvalidPlayerMove
 from game.game import Game
-from game.game_state_machine import GameState, PlayerAction
+from game.game_state_machine import GameState, PlayerAction, SurrenderAction
 from game.state.game_state_end import GameStateEnd
+from model.player import Player
 
 
 # ------------------------------------------------------------
@@ -48,7 +49,7 @@ class GameStatePlay(GameState):
             raise InvalidPlayerMove("Card " + str(card) + " is not a valid move by player " + player.name)
 
     def finish_trick(self):
-        current_trick_points = self.game.finish_trick()
+        self.game.finish_trick()
         # check if game is over
         if self.game.round is Game.MAX_ROUNDS:
             self.finish_game()
@@ -57,12 +58,6 @@ class GameStatePlay(GameState):
             self.game.round += 1
 
     def finish_game(self):
-        # if self.game.has_declarer_won():
-        #     print(str(self.game.get_declarer()) + " wins with " + str(
-        #         # self.game.get_declarer().sum_trick_values()) + " points.")
-        # else:
-        #     print("Defenders won with " + str(120 - self.game.get_declarer().sum_trick_values()) + " points.")
-
         self.handle_state_finished()
 
     def surrender(self, player):
@@ -82,8 +77,7 @@ class PlayCardAction(PlayerAction):
         self.card = card
 
 
-class SurrenderAction:
-    def __init__(self, player):
-        super().__init__(player)
-        self.player = player
+# class SurrenderAction(SurrenderAction):
+#     def __init__(self, player: Player):
+#         super().__init__(player)
 

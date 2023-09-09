@@ -74,7 +74,7 @@ class Game:
             return self.get_declarer().sum_trick_values() == 0
         if self.game_variant.get_level() > 2:
             return self.get_declarer().sum_trick_values() == 120
-        elif self.game_variant.get_level == 1:
+        elif self.game_variant.get_level() == 1:
             return self.get_declarer().sum_trick_values() >= 30
         else:
             return self.get_declarer().sum_trick_values() > 60

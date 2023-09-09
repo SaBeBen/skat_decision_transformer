@@ -217,6 +217,7 @@ game_variants = game_variants.drop(labels=["Null Ouvert", "Null Hand", "Null Ouv
 
 # Create a pie plot showing the relative occurrence of game variants in all games
 game_variants.plot(kind="pie", y="Game", autopct='%1.0f%%')
+plt.ylabel(f"All Games of {championship}")
 plt.savefig(f"graphics/all_games_pie_{championship}.png")
 plt.show()
 

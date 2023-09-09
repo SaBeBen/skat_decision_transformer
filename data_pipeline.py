@@ -1,4 +1,4 @@
-from math import ceil
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -11,24 +11,39 @@ from card_representation_conversion import convert_numerical_to_card, convert_ca
 from environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
 from exceptions import InvalidPlayerMove
 
-from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull
-from game.state.game_state_bid import DeclareGameVariantAction, PutDownSkatAction, BidCallAction, BidPassAction, \
+from game.state.game_state_bid import PutDownSkatAction, BidCallAction, BidPassAction, \
     PickUpSkatAction
 from game.state.game_state_play import PlayCardAction
 
 from model.player import Player
-from model.card import Card
+
 
 POSSIBLE_CHAMPIONSHIPS = ["wc", "bl", "gc", "gtc", "rc"]
 
 
-def get_game(game="wc", games_indices=slice(0, -1)):
-    if game not in POSSIBLE_CHAMPIONSHIPS:
-        raise ValueError(f"The championship {game} does not exist in the database.")
+# To see more detailed description of raw data, read README.md in data.
+def get_game(championship="wc",
+             games_indices=slice(0, -1),
+             include_grand=False,
+             include_surr=False
+             ) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Reads in championships stored in CSV format in data folder.
 
-    skat_cs_path = f"data/{game}_card_sequence.CSV"
+    :param championship: Championship to read the data from.
+    :param games_indices: The games to be selected after filtering games.
+     Filtering includes all passed and depending on include_grand and include_surr those too.
+    :param include_grand: Whether to include grand games.
+    :param include_surr: Whether to include surrendered games.
+    :return: First: NumPy array of meta and card information. Secondly: Numpy array of played card sequence.
+    """
 
-    skat_game_path = f"data/{game}_game.CSV"
+    if championship not in POSSIBLE_CHAMPIONSHIPS:
+        raise ValueError(f"The championship {championship} does not exist in the database.")
+
+    skat_cs_path = f"data/{championship}_card_sequence.CSV"
+
+    skat_game_path = f"data/{championship}_game.CSV"
 
     skat_cs_data = pd.read_csv(skat_cs_path, header=None)
 
@@ -54,24 +69,33 @@ def get_game(game="wc", games_indices=slice(0, -1)):
     # GameID (0), PlayerFH (6), PlayerMH (7), PlayerRH (8), Card1 (9):Card30 (38), Card31 (39): Card32 (40) = Skat,
     # PlayerID (44), Game (45), Hand(48), PointsPlayer (54), Won (55), Miscall (56), AllPassed (58), Surrendered (59)
     # only needs cards of current player
-    columns = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 48, 54, 55, 56, 58, 59]
+    columns = [0, 6, 7, 8] + list(range(9, 41)) + [44, 45, 48, 49, 50, 51, 52, 53, 54, 55, 56, 58, 59]
 
     skat_game_data = skat_game_data.iloc[:, columns]
 
-    # if someone surrendered, the rest of the cards are in the cs data in their order
+    # if someone surrendered, the rest of the cards are in the cs data in their order,
+    # so we have to tell the exact position of surrender
 
-    # exclude games where all players passed
-    skat_game_data = skat_game_data[(skat_game_data["AllPassed"] == 0) & (skat_game_data["Surrendered"] == 0)]
-    # & (skat_game_data["Won"] == 1)]
+    # exclude games where all players passed and those with a miscall
+    # the latter leads to sloppy and unpredictable behaviour and is not noted correctly,
+    # e.g. GameID544205 and IDGame 8xIN8X3LIMxICPx (for "Skat-Archiv")
+    # only rules out 0.19 % of the games in wc (see analysis)
+    skat_game_data = skat_game_data[(skat_game_data["AllPassed"] == 0)
+                                    | (skat_game_data["Miscall"] == 0)]
+
+    if not include_surr:
+        skat_game_data = skat_game_data[(skat_game_data["Surrendered"] == 0)]
+        skat_cs_data = skat_cs_data[(skat_cs_data["SurrenderedAt"] <= -1)]
+
+    if not include_grand:
+        skat_game_data = skat_game_data[(skat_game_data["Game"] != 24)]
 
     # exclude grand and null games
-    skat_game_data = skat_game_data[(skat_game_data["Game"] != 24)
-                                    & (skat_game_data["Game"] != 23)
-                                    & (skat_game_data["Game"] != 35)
-                                    & (skat_game_data["Game"] != 46)
-                                    & (skat_game_data["Game"] != 59)]
-
-    skat_cs_data = skat_cs_data[skat_cs_data["SurrenderedAt"] <= -1]
+    skat_game_data = skat_game_data[
+        (skat_game_data["Game"] != 23)
+        & (skat_game_data["Game"] != 35)
+        & (skat_game_data["Game"] != 46)
+        & (skat_game_data["Game"] != 59)]
 
     # get rid of certain games by merging
     merged_game = pd.merge(skat_game_data, skat_cs_data, how="inner", on="GameID")
@@ -94,53 +118,21 @@ def get_game(game="wc", games_indices=slice(0, -1)):
     return skat_game_data.to_numpy(), skat_and_cs
 
 
-def surrender(won, current_player, soloist_points, trick, game_state, actions, rewards, state_dim):
-    # if game was surrendered by defenders out of the perspective of soloist or
-    # if game was surrendered by soloist out of the perspective of a defender
-    if won:
-        # add reward and player points as last reward
-        rewards.append(current_player.current_trick_points + soloist_points)
-        actions.append([0] * ACT_DIM)
-    else:
-        # action of surrendering
-        actions.append([1] * ACT_DIM)
-        # default behaviour (gives a negative reward here)
-        rewards.append(current_player.current_trick_points)
-
-    # pad the states, actions and rewards with 0s
-    game_state += ([0] * state_dim) * (10 - trick)
-    actions = actions + [[0] * ACT_DIM] * (9 - trick)
-    rewards = rewards + [0] * (10 - trick)
-
-    return game_state, actions, rewards
-
-
-def declare_game_variant(env, trump):
-    # declare the game variant
-    if trump == 0 or trump == 35 or trump == 46 or trump == 59:
-        # null
-        env.state_machine.handle_action(DeclareGameVariantAction(env.game.get_declarer(), GameVariantNull()))
-    elif trump == 24:
-        # grand
-        env.state_machine.handle_action(DeclareGameVariantAction(env.game.get_declarer(), GameVariantGrand()))
-    else:
-        # convert DB encoding to env encoding
-        suit = Card.Suit(trump - 9)
-        # announce game variant
-        env.state_machine.handle_action(DeclareGameVariantAction(env.game.get_declarer(), GameVariantSuit(suit)))
-
-
 def get_states_actions_rewards(
         championship="wc",
         games_indices=slice(0, 1000),
         point_rewards=False,
         perspective=(0, 1, 2),
-        card_enc='mixed_comp'
+        card_enc='mixed_comp',
+        include_grand=False,
+        include_surr=False
 ):
+
     """
     Load championship log data from csv files, replay the games, while at the same time transforming it into our
     state, action and reward representation.
     Only processes non-surrendered suit games, but is able to output all variants.
+
 
     :param championship: The championship to prepare. Input: abbreviation of the championship. Only "wc" works due to
     corrupt logging in the database.
@@ -149,11 +141,19 @@ def get_states_actions_rewards(
     on card points and game success.
     :param perspective: The player(s)' perspectives. Cannot
     :param card_enc: The card encoding to use. "one-hot", "mixed", "mixed_comp" and "one-hot_comp" are possible.
-    :return:
+    :param include_grand: Whether to include grand games.
+    :param include_surr: Whether to include surrendered games.
+
+    :return: Dict of NumPy Array of states, actions and rewards. Also returns integer GameIDs from corrupt games.
+    Additionally returns raw game tables for evaluation: Namely first states, meta and initial card information,
+    correct actions in indexing format and the card sequence.
     """
 
     # load the meta information, initial card configuration (meta_and_cards) and the course of the game (skat_and_cs)
-    meta_and_cards, skat_and_cs = get_game(game=championship, games_indices=games_indices)
+    meta_and_cards, skat_and_cs = get_game(championship=championship,
+                                           games_indices=games_indices,
+                                           include_grand=include_grand,
+                                           include_surr=include_surr)
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(card_enc)
 
@@ -184,6 +184,7 @@ def get_states_actions_rewards(
         for i in perspective:
 
             if skip:
+                # TODO: breaks out of non existing games
                 skip = False
                 print(f"broke out of game {game[0]}")
                 card_error_games.append(game[0])
@@ -195,19 +196,22 @@ def get_states_actions_rewards(
             # trump: game the soloist plays
             # hand: binary encoding whether hand was played
             # soloist_points: points the soloist receives for playing a certain game
-            player_id, trump, hand, soloist_points = game[-8], game[-7], game[-6], game[-5]
+            player_id, trump, hand, soloist_points = game[-13], game[-12], game[-11], game[-5]
+
+            # additional levels
+            schneider, schneider_called, schwarz, schwarz_called, ouvert = game[-10], game[-9], game[-8], game[-7], \
+                game[-6]
+
+            # only represent the called levels in the state, the agent should not know if they are achieved
+            game_level_bonus = [hand + schneider_called + schwarz_called + ouvert]
 
             # categorical encoding of trump suit color
             # if a grand is played --> [1, 1, 1, 1]
             # if a null game is played --> [0, 0, 0, 0]
             trump_enc = get_trump_enc(trump)
 
-            # if a game was surrendered, the amount of tricks played before surrender is stored in surrendered trick
+            # if a game was surrendered, the amount of cards played before surrender is stored in surrendered_card
             surrendered_card = skat_and_cs[cs_index, -1]
-            if surrendered_card > -1:
-                surrendered_trick = ceil(surrendered_card / 3)
-            else:
-                surrendered_trick = surrendered_card
 
             # skip start of the game (shuffling and dealing)
             env.state_machine.state_finished_handler()
@@ -301,6 +305,21 @@ def get_states_actions_rewards(
                 # pick up the Skat
                 env.state_machine.handle_action(PickUpSkatAction(env.game.get_declarer()))
 
+                # if the game is surrendered instantly
+                if surrendered_card == 0:
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards, state_dim)
+                    # in the end of each game, insert the states, actions and rewards
+                    # with composite primary keys game_id and player perspective
+                    # (1: forehand, 2: middle-hand, 3: rear-hand)
+                    # insert states
+                    game_state_table[3 * cs_index + i] = np.array_split(np.array(game_state, dtype=np.int16), ACT_DIM)
+                    # insert actions
+                    actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
+                    # insert rewards
+                    rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                    break
+
                 env.game.get_declarer().cards.sort()
 
                 if current_player.type == Player.Type.DECLARER:
@@ -308,9 +327,9 @@ def get_states_actions_rewards(
                 else:
                     put_card = [0]
 
-                # first game state
-                game_state = pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
-                    current_player, encoding=card_enc)
+                # first game state + game_level_bonus
+                game_state = pos_p + put_card  + score + trump_enc + last_trick + open_cards \
+                             + get_hand_cards(current_player, encoding=card_enc)
 
                 # ...put down Skat one by one
                 # each Skat card needs its own action (due to fixed dimensions)
@@ -341,7 +360,8 @@ def get_states_actions_rewards(
                     # the last trick is the put Skat and padding in the beginning
                     last_trick = convert_card_to_enc(skat1, encoding=card_enc) + [0] * card_dim + [0] * card_dim
 
-                    game_state += pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
+                    # + game_level_bonus
+                    game_state += pos_p + put_card  + score + trump_enc + last_trick + open_cards + get_hand_cards(
                         current_player, encoding=card_enc)
 
                     # categorical encoding of played card as action: put second card
@@ -380,7 +400,8 @@ def get_states_actions_rewards(
                     actions += [[0] * ACT_DIM, [0] * ACT_DIM]
                     rewards += [0, 0]
 
-                    game_state += pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
+                    # + game_level_bonus
+                    game_state += pos_p + put_card  + score + trump_enc + last_trick + open_cards + get_hand_cards(
                         current_player, encoding=card_enc)
 
                     try:
@@ -390,6 +411,21 @@ def get_states_actions_rewards(
                         skip = True
                         break
             else:
+                # if the game is surrendered instantly
+                if surrendered_card == 0:
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards, state_dim)
+                    # in the end of each game, insert the states, actions and rewards
+                    # with composite primary keys game_id and player perspective
+                    # (1: forehand, 2: middle-hand, 3: rear-hand)
+                    # insert states
+                    game_state_table[3 * cs_index + i] = np.array_split(np.array(game_state, dtype=np.int16), ACT_DIM)
+                    # insert actions
+                    actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
+                    # insert rewards
+                    rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                    break
+
                 # if hand is played, show to not put a card
                 put_card = [0]
 
@@ -398,142 +434,158 @@ def get_states_actions_rewards(
                 rewards.extend([0, 0])
 
                 # if hand is played, there are two identical game states from the perspective of every player
-                game_state = pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
-                    current_player, encoding=card_enc)
+                # + game_level_bonus
+                game_state = pos_p + put_card  + score + trump_enc + last_trick + open_cards \
+                             + get_hand_cards(current_player, encoding=card_enc)
 
-                game_state += pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
-                    current_player, encoding=card_enc)
+                # + game_level_bonus
+                game_state += pos_p + put_card  + score + trump_enc + last_trick + open_cards \
+                              + get_hand_cards(current_player, encoding=card_enc)
 
             # declare the game variant
-            declare_game_variant(env, trump)
+            env.declare_game_variant(trump, hand, schneider_called, schwarz_called, ouvert)
 
-            # if the game is surrendered instantly
-            if surrendered_trick == 0:
-                game_state, actions, rewards = \
-                    surrender(won, current_player, soloist_points, 0, game_state, actions, rewards, state_dim)
-            else:
-                # iterate over each trick
-                for trick in range(1, 11):
+            # iterate over each trick
+            for trick in range(1, 11):
 
-                    # the first score shows the current players score
-                    score[1] += env.game.get_last_trick_points() if current_player.current_trick_points == 0 else 0
-                    score[0] += current_player.current_trick_points
+                # the first score shows the current players score
+                score[1] += env.game.get_last_trick_points() if current_player.current_trick_points == 0 else 0
+                score[0] += current_player.current_trick_points
 
-                    # always put a card in non-surrendered games
-                    game_state += pos_p + [1] + score + trump_enc + last_trick
+                # always put a card in non-surrendered games
+                game_state += pos_p + [1] + score + trump_enc + last_trick
 
-                    # if the player sits in the front of this trick
-                    if env.game.trick.leader == current_player:
-                        # in position of first player, there are no open cards
-                        open_cards = [0] * card_dim + [0] * card_dim
-
-                        game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
-
-                        cat_action = [0] * ACT_DIM
-                        try:
-                            cat_action[current_player.cards.index(
-                                convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1]))] = 1
-                            actions.append(cat_action)
-                        except ValueError:
-                            skip = True
-                            break
-
-                    try:
-                        # iterates over players
-                        # each time PlayCardAction is called the role of the current player rotates
-                        env.state_machine.handle_action(
-                            PlayCardAction(player=env.game.trick.leader,
-                                           card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1])))
-                    except ValueError or InvalidPlayerMove:
-                        skip = True
-                        break
-
-                    # if the player sits in the middle of this trick
-                    if env.game.trick.get_current_player() == current_player:
-                        # in position of the second player, there is one open card
-                        open_cards = convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick - 1],
-                                                              encoding=card_enc) + [0] * card_dim
-
-                        game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
-
-                        cat_action = [0] * ACT_DIM
-                        try:
-                            cat_action[
-                                current_player.cards.index(
-                                    convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick]))] = 1
-                            actions.append(cat_action)
-                        except ValueError:
-                            skip = True
-                            break
-
-                    try:
-                        # iterates over players
-                        # each time PlayCardAction is called the role of the current player rotates
-                        env.state_machine.handle_action(
-                            PlayCardAction(player=env.game.trick.get_current_player(),
-                                           card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick])))
-                    except ValueError or InvalidPlayerMove:
-                        skip = True
-                        break
-
-                    # if the player sits in the rear of this trick
-                    if env.game.trick.get_current_player() == current_player:
-                        # in position of the third player, there are two open cards
-                        open_cards = convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick - 1],
-                                                              encoding=card_enc) + \
-                                     convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick], encoding=card_enc)
-
-                        game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
-
-                        cat_action = [0] * ACT_DIM
-                        try:
-                            cat_action[current_player.cards.index(
-                                convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1]))] = 1
-                            actions.append(cat_action)
-                        except ValueError:
-                            skip = True
-                            break
-
-                    try:
-                        # iterates over players
-                        # each time PlayCardAction is called the role of the current player rotates
-                        env.state_machine.handle_action(
-                            PlayCardAction(player=env.game.trick.get_current_player(),
-                                           card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1])))
-                    except ValueError or InvalidPlayerMove:
-                        skip = True
-                        break
-
-                    last_trick = convert_numerical_to_enc(
-                        skat_and_cs[cs_index, 3 * trick - 1], encoding=card_enc) + convert_numerical_to_enc(
-                        skat_and_cs[cs_index, 3 * trick], encoding=card_enc) + convert_numerical_to_enc(
-                        skat_and_cs[cs_index, 3 * trick + 1], encoding=card_enc)
-
-                    # check if game was surrendered at this trick
-                    if surrendered_trick == trick:
-                        game_state, actions, rewards = \
-                            surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                # check if game was surrendered at this card
+                if surrendered_card == ((trick - 1) * 3):
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
                                       state_dim)
+                    break
+
+                # if the player sits in the front of this trick
+                if env.game.trick.leader == current_player:
+                    # in position of first player, there are no open cards
+                    open_cards = [0] * card_dim + [0] * card_dim
+
+                    game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
+
+                    cat_action = [0] * ACT_DIM
+                    try:
+                        cat_action[current_player.cards.index(
+                            convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1]))] = 1
+                        actions.append(cat_action)
+                    except ValueError:
+                        skip = True
                         break
-                    else:
-                        rewards.append(current_player.current_trick_points)
 
-                        if trick == 1 and not hand and current_player.type == Player.Type.DECLARER:
-                            rewards[-1] += skat1.get_value() + skat2.get_value()
+                try:
+                    # iterates over players
+                    # each time PlayCardAction is called the role of the current player rotates
+                    env.state_machine.handle_action(
+                        PlayCardAction(player=env.game.trick.leader,
+                                       card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1])))
+                except ValueError or InvalidPlayerMove:
+                    skip = True
+                    break
 
-                # if hand is played, adding the Skat points in the end of the game simulates not knowing them
-                if hand:
-                    skat_points = (skat_up[0].get_value() + skat_up[1].get_value())
-                    if current_player.type == Player.Type.DECLARER:
-                        score[0] += skat_points
-                        rewards[-1] += skat_points
-                    else:
-                        score[1] += skat_points
-                        rewards[-1] -= skat_points
+                # check if game was surrendered at this card
+                if surrendered_card == ((trick - 1) * 3 + 1):
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                      state_dim)
+                    break
+                # if the player sits in the middle of this trick
+                if env.game.trick.get_current_player() == current_player:
+                    # in position of the second player, there is one open card
+                    open_cards = convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick - 1],
+                                                          encoding=card_enc) + [0] * card_dim
+
+                    game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
+
+                    cat_action = [0] * ACT_DIM
+                    try:
+                        cat_action[
+                            current_player.cards.index(
+                                convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick]))] = 1
+                        actions.append(cat_action)
+                    except ValueError:
+                        skip = True
+                        break
+
+                try:
+                    # iterates over players
+                    # each time PlayCardAction is called the role of the current player rotates
+                    env.state_machine.handle_action(
+                        PlayCardAction(player=env.game.trick.get_current_player(),
+                                       card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick])))
+                except ValueError or InvalidPlayerMove:
+                    skip = True
+                    break
+
+                # check if game was surrendered at this card
+                if surrendered_card == ((trick - 1) * 3 + 2):
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                      state_dim)
+                    break
+                # if the player sits in the rear of this trick
+                if env.game.trick.get_current_player() == current_player:
+                    # in position of the third player, there are two open cards
+                    open_cards = convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick - 1],
+                                                          encoding=card_enc) + \
+                                 convert_numerical_to_enc(skat_and_cs[cs_index, 3 * trick], encoding=card_enc)
+
+                    game_state += open_cards + get_hand_cards(current_player, encoding=card_enc)
+
+                    cat_action = [0] * ACT_DIM
+                    try:
+                        cat_action[current_player.cards.index(
+                            convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1]))] = 1
+                        actions.append(cat_action)
+                    except ValueError:
+                        skip = True
+                        break
+
+                try:
+                    # iterates over players
+                    # each time PlayCardAction is called the role of the current player rotates
+                    env.state_machine.handle_action(
+                        PlayCardAction(player=env.game.trick.get_current_player(),
+                                       card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1])))
+                except ValueError or InvalidPlayerMove:
+                    skip = True
+                    break
+
+                last_trick = convert_numerical_to_enc(
+                    skat_and_cs[cs_index, 3 * trick - 1], encoding=card_enc) + convert_numerical_to_enc(
+                    skat_and_cs[cs_index, 3 * trick], encoding=card_enc) + convert_numerical_to_enc(
+                    skat_and_cs[cs_index, 3 * trick + 1], encoding=card_enc)
+
+                # check if game was surrendered at this card
+                if surrendered_card == (trick * 3 + 3):
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                      state_dim)
+                    break
                 else:
-                    # make the card points of the Skat visible for the defenders in the end of the game
-                    if current_player.type != Player.Type.DECLARER:
-                        score[1] += skat1.get_value() + skat2.get_value()
+                    rewards.append(current_player.current_trick_points)
+
+                    if trick == 1 and not hand and current_player.type == Player.Type.DECLARER:
+                        rewards[-1] += skat1.get_value() + skat2.get_value()
+
+            # if hand is played, adding the Skat points in the end of the game simulates not knowing them
+            if hand:
+                skat_points = (skat_up[0].get_value() + skat_up[1].get_value())
+                if current_player.type == Player.Type.DECLARER:
+                    score[0] += skat_points
+                    rewards[-1] += skat_points
+                else:
+                    score[1] += skat_points
+                    rewards[-1] -= skat_points
+            else:
+                # make the card points of the Skat visible for the defenders in the end of the game
+                if current_player.type != Player.Type.DECLARER:
+                    score[1] += skat1.get_value() + skat2.get_value()
 
             # reward system:
             if point_rewards:
@@ -589,6 +641,8 @@ if __name__ == '__main__':
             # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)
 
             data, _, _, _, _, _ = get_states_actions_rewards(championship,
+                                                             include_surr=True,
+                                                             include_grand=True,
                                                              games_indices=slice(0, -1),
                                                              point_rewards=point_rewards,
                                                              card_enc=enc)
@@ -600,4 +654,4 @@ if __name__ == '__main__':
             dataset = DatasetDict({"train": Dataset.from_dict(data_train),
                                    "test": Dataset.from_dict(data_test)})
             dataset.save_to_disk(
-                f"./datasets/{championship}-without_surr_and_passed-pr_{point_rewards}-{enc}-card_put-clean")
+                f"./datasets/{championship}-surr_grand-pr_{point_rewards}-{enc}-card_put")

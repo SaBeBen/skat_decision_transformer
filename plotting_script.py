@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 SKAT_DT_ROOT = os.getcwd()
 
 
-def tensorboard_logs_to_df(log_dir):
+def tensorboard_logs_to_df(log_dir, mode=None):
     event_acc = event_accumulator.EventAccumulator(log_dir).Reload()
 
     data = []
@@ -19,12 +19,13 @@ def tensorboard_logs_to_df(log_dir):
     # exclude not used metrics
     tags = tags[:13]
 
-    mode = log_dir.split("encoding_")[1]    # .split("-point_rewards_")[0]
+    if mode is None:
+        mode = log_dir.split("True-")[1]
 
     for tag in tags:
         events = event_acc.Scalars(tag)
         data.append({
-            'mode': mode,
+            'Encoding': mode,
             'tag': tag,
             'step': [int(event.step) for event in events],
             'value': [float(event.value) for event in events]
@@ -39,10 +40,14 @@ def plot_tb(run_ids, tags, convert_tb_to_csv=False):
 
     df = pd.DataFrame([])
 
+    mode = ["Masking", "No Masking"]
+    i = 0
+
     for run_id in run_ids:
         log_dir = f'tensorboard_graphs/{run_id}'
 
-        log_df = tensorboard_logs_to_df(log_dir)
+        log_df = tensorboard_logs_to_df(log_dir, mode[i])
+        i += 1
 
         df = pd.concat([df, log_df])
 
@@ -62,26 +67,36 @@ def plot_tb(run_ids, tags, convert_tb_to_csv=False):
             data=df_tag,
             x='step',
             y='value',
-            hue='mode',
+            hue='Encoding',
         )
 
         plt.xlabel('Step')
         plt.ylabel(tag_name)
-        plt.title(f'{tag_name} over Steps')
+        # plt.title(f'{tag_name} over Steps')
         plt.show()
+
+
+# one-hot_comp,eval/loss: ,[60000],[0.9782999753952026]
+# mixed,eval/loss: ,[60000],[1.0037000179290771]
+# mixed_comp,eval/loss: ,[60000],[1.0735000371932983]
+# one-hot,eval/loss: ,[60000],[0.960099995136261]
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Convert tensorboard data to csv.')
 
-    run_ids = ["20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_00-02-44_2023",
-               "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
-               "games_0-50000-encoding_one-hot-point_rewards_True-card_put-pure_loss-gas--Thu_Sep__7_10-29-38_2023",
-               "games_0-20000-encoding_one-hot-point_rewards_True-card_put-pure_loss-gas-Thu_Sep__7_00-55-38_2023",
-               "games_0-20000-encoding_one-hot-point_rewards_True-card_put-pure_loss-gas-Thu_Sep__7_12-23-54_2023"]
+    run_ids = ["games_0-20000-encoding_one-hot-point_rewards_True-card_put-pure_loss-no_gas-Fri_Sep__8_14-32-58_2023",
+               "games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-20-39_2023",
+               # "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-20-39_2023",
 
-    tags = ["train/tr_loss", "train/probability_of_correct_action", "train/loss", "eval/prob_correct_action",
-            "eval/loss: "]
+               ]
+
+    tags = [
+        # "train/probability_of_correct_action", "train/loss", "eval/prob_correct_action", "train/rate_oob_actions",
+        #    "train/rate_wrong_action_taken",
+        "eval/prob_correct_action", "eval/rate_wrong_action_taken",
+        "eval/loss: "
+    ]
 
     parser.add_argument(
         "--run_ids", type=str, nargs="+", default=run_ids,

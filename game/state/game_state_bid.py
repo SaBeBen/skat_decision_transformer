@@ -1,6 +1,6 @@
 from exceptions import InvalidCardSize, InvalidPlayerMove
 
-from game.game_state_machine import GameState, PlayerAction
+from game.game_state_machine import GameState, PlayerAction, SurrenderAction
 from game.state.game_state_play import GameStatePlay
 from model.card import Card
 from model.player import Player
@@ -9,7 +9,6 @@ from model.player import Player
 # ------------------------------------------------------------
 # Concrete game state class for bidding
 # ------------------------------------------------------------
-# TODO actions to make additional declarations like Schneider, Ouvert, etc.
 class GameStateBid(GameState):
     available_bid_values = [18, 20, 22, 23, 24, 27, 30, 33, 35, 36, 40, 44, 45, 46, 48, 50, 54, 55, 59, 60, 63, 66, 70,
                             72, 77, 80, 84, 88, 90, 96, 99, 100, 108, 110, 117, 120, 121, 126, 130, 132, 135, 140, 143,
@@ -41,6 +40,8 @@ class GameStateBid(GameState):
             self.put_down_skat(action.player, action.cards_to_put)
         elif isinstance(action, DeclareGameVariantAction):
             self.declare_game(action.player, action.game_variant)
+        elif isinstance(action, SurrenderAction):
+            self.surrender(action.player)
         else:
             super().handle_action(action)
 
@@ -76,6 +77,15 @@ class GameStateBid(GameState):
         self.game.game_variant = game_variant
         # start next state
         self.handle_state_finished()
+
+    def finish_game(self):
+        # skip game state play
+        self.handle_state_finished()
+        self.handle_state_finished()
+
+    def surrender(self, player):
+        self.game.surrender(player)
+        self.finish_game()
 
     def get_next_state(self):
         return GameStatePlay(self.game)

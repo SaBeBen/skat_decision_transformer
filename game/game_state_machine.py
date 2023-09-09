@@ -48,3 +48,11 @@ class GameAction(metaclass=ABCMeta):
 class PlayerAction(GameAction):
     def __init__(self, player):
         self.player = player
+
+
+# ------------------------------------------------------------
+# Abstract Surrender action class
+# ------------------------------------------------------------
+class SurrenderAction(PlayerAction):
+    def __init__(self, player):
+        super().__init__(player)

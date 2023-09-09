@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple, Callable
 
 import numpy as np
 import torch
@@ -19,11 +19,12 @@ from model.player import Player
 
 # # card representation is a vector
 ACT_DIM = 12
+MAX_EPISODE_LENGTH = 12
 
 card_encodings = ["mixed_comp", "mixed", "one-hot_comp", "one-hot"]
 
 
-def get_dims_in_enc(encoding: str):
+def get_dims_in_enc(encoding: str) -> Tuple[int, int, int]:
     if encoding == "mixed_comp":
         card_dim = 5
         max_hand_len = 16 + ACT_DIM
@@ -40,8 +41,9 @@ def get_dims_in_enc(encoding: str):
         raise NotImplementedError(f"The encoding {encoding} is not supported. Supported encodings are "
                                   f"'mixed', 'one-hot', 'mixed_comp' and one-hot_comp.")
 
-    # position co-player (3) + put_card (1) + score (2) + trump (4) + last trick (3 * card_dim)
+    # position co-player (3) + put_card (1) + game_level_bonus (1) + score (2) + trump (4) + last trick (3 * card_dim)
     # + open cards (2 * card_dim) + padded hand cards (12 * card_dim)
+    # + 1
     state_dim = 3 + 1 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len
 
     return card_dim, max_hand_len, state_dim
@@ -54,7 +56,8 @@ def get_trump_enc(trump: int) -> List[int]:
             1 if trump == 11 or trump == 24 else 0, 1 if trump == 12 or trump == 24 else 0]
 
 
-def get_peaks(cards, trump):
+def get_peaks(cards: List[Card],
+              trump: Card.Suit) -> int:
     # first sort the cards to sort the peaks to the left of the hand
     peak_sorting = merge_sort(cards, Card.gt_for_peaks, trump)
     if peak_sorting[0].face == Card.Face.JACK and peak_sorting[0].suit == Card.Suit.CLUB:
@@ -81,7 +84,9 @@ def get_peaks(cards, trump):
 
 
 # merge sort function to order the peaks to the left
-def merge_sort(cards, peak_comp, trump):
+def merge_sort(cards: List,
+               peak_comp: Callable[[Card, Card, Card.Suit], bool],
+               trump: Card.Suit) -> List:
     if len(cards) <= 1:
         return cards
 
@@ -203,7 +208,7 @@ def get_hand_cards(current_player: Player, encoding="mixed_comp") -> List[int]:
     return hand_cards
 
 
-def initialise_hand_cards(game, current_player: Player, current_player2: Player, current_player3: Player):
+def initialise_hand_cards(game, current_player: Player, current_player2: Player, current_player3: Player) -> None:
     current_player.set_cards(
         [convert_numerical_to_card(card) for card in
          game[4 + 10 * current_player.get_id():14 + 10 * current_player.get_id()].tolist()])
@@ -222,7 +227,7 @@ def initialise_hand_cards(game, current_player: Player, current_player2: Player,
 
 # calculates the win probability solely based on the starting hand cards of a player
 # a game is considered winnable if the kinback score of the own cards is at least 8.5 points
-def calculate_kinback_scheme(hand_cards: List[Card], pos: int):
+def calculate_kinback_scheme(hand_cards: List[Card], pos: int) -> Tuple[int, int]:
     kb_score = 0
 
     # hand cards are sorted by colours and value
@@ -314,12 +319,10 @@ def calculate_kinback_scheme(hand_cards: List[Card], pos: int):
 
 class Env:
     def __init__(self, enc):
-        # self.device = torch.device("cuda")
-        # Name the players with placeholders to recognize them during evaluation and debugging
 
-        self.player1 = Player(0, "Alice")
-        self.player2 = Player(1, "Bob")
-        self.player3 = Player(2, "Carol")
+        self.player1 = Player(0, "Fore-hand")
+        self.player2 = Player(1, "Mid-hand")
+        self.player3 = Player(2, "Rear-hand")
         self.game = Game([self.player1, self.player2, self.player3])
         self.state_machine = GameStateMachine(GameStateStart(self.game))
 
@@ -349,6 +352,64 @@ class Env:
     def _get_state(self):
         return self.state
 
+    def surrender(self,
+                  won,
+                  current_player,
+                  soloist_points,
+                  trick,
+                  game_state,
+                  actions,
+                  rewards,
+                  state_dim):
+        # if game was surrendered by defenders out of the perspective of soloist or
+        # if game was surrendered by soloist out of the perspective of a defender
+        if won:
+            if current_player.type == Player.Type.DECLARER:
+                self.state_machine.handle_action(SurrenderAction(self.game.trick.get_next_player(current_player)))
+            else:
+                self.state_machine.handle_action(SurrenderAction(self.game.get_declarer()))
+            # add reward and player points as last reward
+            rewards.append(current_player.current_trick_points + soloist_points)
+            actions.append([0] * ACT_DIM)
+        else:
+            self.state_machine.handle_action(SurrenderAction(current_player))
+
+            # action of surrendering
+            actions.append([1] * ACT_DIM)
+            # default behaviour (gives a negative reward here)
+            rewards.append(current_player.current_trick_points)
+
+        # pad the states, actions and rewards with 0s
+        game_state += ([0] * state_dim) * (10 - trick)
+        actions = actions + [[0] * ACT_DIM] * (9 - trick)
+        rewards = rewards + [0] * (10 - trick)
+
+        return game_state, actions, rewards
+
+    def declare_game_variant(self,
+                             trump,
+                             hand=False,
+                             schneider_called=False,
+                             schwarz_called=False,
+                             ouvert=False):
+        # declare the game variant
+        if trump == 0 or trump == 35 or trump == 46 or trump == 59:
+            # null
+            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(),
+                                                                      GameVariantNull(ouvert=ouvert)))
+        elif trump == 24:
+            # grand
+            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(),
+                                                                      GameVariantGrand(hand, schneider_called,
+                                                                                       schwarz_called, ouvert)))
+        else:
+            # convert DB encoding to self encoding
+            suit = Card.Suit(trump - 9)
+            # announce game variant
+            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(),
+                                                                      GameVariantSuit(suit, hand, schneider_called,
+                                                                                      schwarz_called, ouvert)))
+
     def get_declarer_from_pos(self, pos_p: List[int]):
         # get the declarer of the data by using the pos_p encoding, e.g. (-1,0,1) for a defender in mid-hand
         if sum(pos_p) == -2:
@@ -362,7 +423,15 @@ class Env:
         # Seeger-Fabian score
         if sum(self.trump_enc) == 0:
             # if null is played, the game_points are directly inferred
-            game_points = self.game.game_variant.get_level()
+            if self.game.game_variant.hand:
+                if self.game.game_variant.ouvert:
+                    return 59
+                else:
+                    return 35
+            elif self.game.game_variant.ouvert:
+                return 46
+            else:
+                return 23
         else:
             if sum(self.trump_enc) == 4:
                 # grand base value
@@ -385,7 +454,10 @@ class Env:
 
         return game_points
 
-    def reset(self, current_player_id: int, game_first_state=None, meta_and_cards_game=None, skat_and_cs=None):
+    def reset(self, current_player_id: int,
+              game_first_state: np.ndarray,
+              meta_and_cards_game: np.ndarray,
+              skat_and_cs: np.ndarray):
         # this reset needs the game configuration from the data pipeline, otherwise it can not infer the game from
         # the state due to the hidden information (e.g. cards of others, Skat,...)
 
@@ -414,7 +486,7 @@ class Env:
 
         self.trump_enc = list(game_first_state[6:10])
 
-        self.hand = meta_and_cards_game[-6]
+        self.hand = meta_and_cards_game[-11]
 
         game_state = game_first_state
 
@@ -620,8 +692,11 @@ class Env:
         if done:
             reward = self.finish_game(reward)
 
-        game_state = self.pos_p + put_card + self.score + self.trump_enc + self.last_trick + open_cards + get_hand_cards(
-            self.current_player, encoding=self.enc)
+        level = [self.game.game_variant.get_level()]
+
+        #+ level
+        game_state = self.pos_p + put_card  + self.score + self.trump_enc + self.\
+            last_trick + open_cards + get_hand_cards(self.current_player, encoding=self.enc)
 
         if self.skat_put[1] and not done:
             self.last_trick = convert_numerical_to_enc(
@@ -661,17 +736,23 @@ class Env:
 
             self.trump_enc = list(game_first_states[6:10])
 
-            game_state = game_first_states
+            game_states = game_first_states
 
             soloist = self.get_declarer_from_pos(self.pos_p)
 
-            self.hand = meta_and_cards_game[-6]
+            self.hand = meta_and_cards_game[-11]
 
             self.game.game_variant = get_game_variant(self.trump_enc, soloist.cards)
 
             suit = Card.Suit(self.trump_enc.index(1))
 
             self.game.game_variant = GameVariantSuit(trump_suit=suit)
+
+            if not self.hand:
+                self.state_machine.handle_action(PickUpSkatAction(soloist))
+
+                # sort cards again after Skat pickup
+                soloist.cards.sort()
 
         else:
 
@@ -702,42 +783,44 @@ class Env:
 
             self.trump_enc = get_trump_enc(trump)
 
-        if not self.hand:
-            self.state_machine.handle_action(PickUpSkatAction(soloist))
+            if not self.hand:
+                self.state_machine.handle_action(PickUpSkatAction(soloist))
 
-            # sort cards again after Skat pickup
-            soloist.cards.sort()
+                # sort cards again after Skat pickup
+                soloist.cards.sort()
 
-        game_state = [[], [], []]
+            game_states = [[], [], []]
 
-        # determine the position of players
-        self.pos_p = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+            # determine the position of players
+            self.pos_p = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
 
-        self.last_trick, self.open_cards = [], []
+            self.last_trick, self.open_cards = [], []
 
-        last_trick = [0] * self.card_dim * 3
-        open_cards = [0] * self.card_dim * 2
+            last_trick = [0] * self.card_dim * 3
+            open_cards = [0] * self.card_dim * 2
 
-        for current_player_id in range(3):
-            if self.game.get_declarer().get_id() == current_player_id:
-                # initialise positions of defender as -1
-                self.pos_p[current_player_id][(current_player_id + 1) % 3], self.pos_p[current_player_id][
-                    (current_player_id + 2) % 3] = -1, -1
-                put_card = [1]
-            elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
-                self.pos_p[current_player_id][(current_player_id + 1) % 3] = -1
-                self.pos_p[current_player_id][(current_player_id + 2) % 3] = 1
-                put_card = [0]
-            else:
-                self.pos_p[current_player_id][(current_player_id + 1) % 3] = 1
-                self.pos_p[current_player_id][(current_player_id + 2) % 3] = -1
-                put_card = [0]
+            for current_player_id in range(3):
+                if self.game.get_declarer().get_id() == current_player_id:
+                    # initialise positions of defender as -1
+                    self.pos_p[current_player_id][(current_player_id + 1) % 3], self.pos_p[current_player_id][
+                        (current_player_id + 2) % 3] = -1, -1
+                    put_card = [1]
+                elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
+                    self.pos_p[current_player_id][(current_player_id + 1) % 3] = -1
+                    self.pos_p[current_player_id][(current_player_id + 2) % 3] = 1
+                    put_card = [0]
+                else:
+                    self.pos_p[current_player_id][(current_player_id + 1) % 3] = 1
+                    self.pos_p[current_player_id][(current_player_id + 2) % 3] = -1
+                    put_card = [0]
 
-            game_state[current_player_id] = self.pos_p[current_player_id] + put_card + [0, 0] + self.trump_enc \
-                                            + last_trick + open_cards \
-                                            + get_hand_cards(self.game.players[current_player_id], self.enc)
+                level = [self.game.game_variant.get_level()]
 
-        return np.array(game_state)
+                # + level
+                game_states[current_player_id] = self.pos_p[current_player_id] + put_card  + [0, 0] + self.\
+                    trump_enc + last_trick + open_cards + get_hand_cards(self.game.players[current_player_id], self.enc)
+
+        return np.array(game_states)
 
     def online_step(self, card_index, current_player_id):  # -> Array, Tuple, Bool:
         # if the action is surrendering
@@ -757,7 +840,6 @@ class Env:
         done = (self.game.round == 10)
 
         # current_player = self.game.trick.get_current_player()
-
         next_player_id = (current_player_id + 1) % 3
 
         # if the Skat is put or in hand game for the first two actions, no card should be played
@@ -877,10 +959,13 @@ class Env:
         if self.skat_put[1]:
             put_card = [1]
 
+        level = [self.game.game_variant.get_level()]
+
         # put_card is always [1] after Skat putting. A possible surrender would pad everything to 0, including put_skat
-        game_state = self.pos_p[current_player_id] + put_card + score + self.trump_enc \
-                     + padded_last_trick \
-                     + padded_open_cards + get_hand_cards(self.game.players[current_player_id], self.enc)
+        # + level
+        game_state = self.pos_p[current_player_id] + put_card + score + self.\
+            trump_enc + padded_last_trick + padded_open_cards + get_hand_cards(
+            self.game.players[current_player_id], self.enc)
 
         # Return state, reward, done
         return np.array(game_state), reward, done, next_player_id
@@ -894,9 +979,9 @@ class Env:
 
         # update last trick if Skat is put and open cards in each turn
         if self.skat_put[1]:
-            game_state[10:46] = padded_last_trick
+            game_state[11:47] = padded_last_trick
 
-        game_state[46:70] = padded_open_cards
+        game_state[47:71] = padded_open_cards
 
         return torch.from_numpy(game_state)
 
