@@ -138,7 +138,7 @@ def run_training(args):
 
     current_time = time.asctime().replace(':', '-').replace(' ', '_')
 
-    dir_name = rf"games_{games_to_load.start}-{games_to_load.stop}-encoding_{hand_encoding}-point_rewards_{point_rewards}-{current_time}"
+    dir_name = rf"games_{games_to_load.start}-{games_to_load.stop}-maks-gamma-1-{current_time}"
 
     logging_dir = rf"./training-logs/{dir_name}"
 
@@ -402,6 +402,8 @@ def evaluate_in_env(model: TrainableDT,
 
 
 def run_online_eval(args):
+    # TODO: change target return with a scale
+
     # game specific arguments
     championship = args['championship']
     hand_encoding = args['hand_encoding']
@@ -409,11 +411,11 @@ def run_online_eval(args):
     perspective = args['perspective']
     games_to_load = slice(args['games'][0], args['games'][1])
 
+    scale = 1
+
     card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
     pretrained_model = TrainableDT.from_pretrained(
         f"./pretrained_models/games_0-50000-encoding_one-hot-point_rewards_True-Mon_Sep__4_23-48-24_2023")
-
-    print(f"Model has state dimension of {pretrained_model.config.state_dim}")
 
     # load_dataset = games_to_load.stop == -1 or games_to_load.stop - games_to_load.start >= 10000
     # if load_dataset:
@@ -432,20 +434,32 @@ def run_online_eval(args):
 
     pretrained_model.config.state_dim = state_dim
 
-    eval_three_agents(pretrained_model,
-                      point_reward=point_rewards,
-                      state_dim=state_dim,
-                      card_enc=hand_encoding,
-                      amount_games=10,
-                      meta_and_cards=meta_and_cards,
-                      first_game_states=first_states
-                      )
+    print("\nEvaluating AI against itself...\n")
+    agents_points, data_points = eval_three_agents(pretrained_model,
+                                                   point_reward=point_rewards,
+                                                   state_dim=state_dim,
+                                                   card_enc=hand_encoding,
+                                                   games=games_to_load,
+                                                   meta_and_cards=meta_and_cards,
+                                                   first_game_states=first_states,
+                                                   scale=scale
+                                                   )
+
+    print(f"The agents achieved a sum of \n\n"
+          f"{agents_points}\t vs. \t {data_points} in the data. \n"
+          f"on games {games_to_load.start, games_to_load.stop}")
+
+    # data["states"][0, :3]
+
+    print(f"The sum of")
 
 
-def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games,
+def eval_three_agents(model, point_reward, state_dim, card_enc, games,
                       meta_and_cards=None,
-                      first_game_states=None):
-    scale = 1
+                      first_game_states=None,
+                      scale=1):
+    # scale is employed as follows: current_return = target_return - latest_reward / scale
+    # should take a value
 
     # initialise s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
@@ -453,7 +467,13 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games,
     # The list points for the three agents
     list_points = [0, 0, 0]
 
-    for j in tqdm(range(amount_games)):
+    # The points of each declarer in the data
+    data_list_points = 0
+
+    # the equivalent to the data_list_points from the agents taking the perspective of the player
+    declarer_points = 0
+
+    for j in tqdm(range(games.stop - games.start)):
         env = Env(card_enc)
 
         games_idx = slice(3 * j, 3 * j + 3)
@@ -623,21 +643,26 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, amount_games,
             # give points to the players.
             # As the environment is reset after each game, the game does not rotate itself.
             # we effectively do this by rotating the rewards with a fix point on the list points
-            list_points[current_player] += torch.sum(rewards[(current_player + j) % 3])
+            list_points[current_player] += game_points
+            # torch.sum(rewards[(current_player + j) % 3])
 
-            # target return is not list points! get list points from meta and cards
-            achieved_points_in_data = meta_and_cards[j][-5]
+            if current_player == env.game.get_declarer().id:
+                declarer_points += game_points
+                # only add the points from the data once for all players
+                # as this loop acknowledges every perspective
+                # target return is not list points! get list points from meta and cards
+                achieved_points_in_data = meta_and_cards[j][-5]
 
-            if env.game.get_declarer().id == current_player:
-                print(f"\nPlayer {env.game.get_declarer().id} achieved a score of {game_points} as declarer.")
-                print(f"\nIn the championship the same position with this starting configuration achieved "
-                      f"{achieved_points_in_data}")
-            else:
-                print(f"\nPlayer {env.game.get_declarer().id} achieved a score of {game_points}")
+                data_list_points += achieved_points_in_data
 
+            # if env.game.get_declarer().id == current_player:
+            #     print(f"\nPlayer {env.game.get_declarer().id} achieved a score of {game_points} as declarer.")
+            #     print(f"\nIn the championship the same position with this starting configuration achieved "
+            #           f"{achieved_points_in_data}")
+            # else:
+            #     print(f"\nPlayer {env.game.get_declarer().id} achieved a score of {game_points}")
 
-    # return list points
-    return list_points
+    return declarer_points, data_list_points
 
 
 def play_with_two(args):
@@ -849,7 +874,7 @@ def play_with_two_agents(model,
                         card_index = -1
                         card_index = input(
                             f"Which card do you want to select?"
-                            f"\nPossible indices are {np.arange(12-t)}")
+                            f"\nPossible indices are {np.arange(12 - t)}")
                         try:
                             card_index = int(card_index)
                         except ValueError:
@@ -984,15 +1009,15 @@ if __name__ == '__main__':
     parser.add_argument('--save_model', type=bool, default=False,
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
-    parser.add_argument('--logging_steps', type=int, default=100)
+    parser.add_argument('--logging_steps', type=int, default=500)
     parser.add_argument('--pretrained_model', type=file_check,
-                        # default="games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
+                        default="games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-18-22_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
     parser.add_argument('--eval_in_training', type=bool, default=True,
                         help="Whether to evaluate during training. Slows down training if activated."
                              "Evaluation takes place on the test portion of the dataset (#_games_to_load * 0.2).")
-    parser.add_argument('--online_eval', type=bool, default=False,
+    parser.add_argument('--online_eval', type=bool, default=True,
                         help="Uses a pre-trained model to play online against itself."
                              " Rules out further training and evaluation of model.")
     parser.add_argument('--play_as', type=int, default=None, choices=[0, 1, 2],

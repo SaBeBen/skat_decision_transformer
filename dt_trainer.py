@@ -247,7 +247,7 @@ class TrainableDT(DecisionTransformerModel):
         # put_card_mask = (1.0 - put_card_mask) * torch.finfo(self.dtype).min
 
         # TODO: comment when wanting to train without a mask
-        action_preds = possible_action_preds  # + put_card_mask
+        # action_preds = possible_action_preds  # + put_card_mask
 
         # apply mask whether a card should be played based on game timestep
         # action_preds = possible_action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
@@ -287,7 +287,7 @@ class TrainableDT(DecisionTransformerModel):
         loss_pure = nll_loss_fct(action_preds_masked, torch.argmax(action_targets_masked, dim=1))
         loss = loss_pure
 
-        action_preds = action_preds_output * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
+        action_preds = action_preds_output  # * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
 
         # for evaluation and online training
         if not return_dict:

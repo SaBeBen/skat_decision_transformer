@@ -57,7 +57,6 @@ class DecisionTransformerSkatDataCollator:
         for ind in batch_inds:
 
             feature = features[int(ind)]
-            # feature = self.dataset[int(ind)]
 
             # why do we use a randint?
             # To be able to jump into one game -> predict from every position and improve training
@@ -82,7 +81,7 @@ class DecisionTransformerSkatDataCollator:
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
                 self._discount_cumsum(np.array(feature["rewards"]), gamma=0.99)[: s[-1].shape[1]].reshape(1, -1, 1)
-                # TODO check the +1 removed here
+                # TODO set gamma
             )
             if rtg[-1].shape[1] < s[-1].shape[1]:
                 print("if true")

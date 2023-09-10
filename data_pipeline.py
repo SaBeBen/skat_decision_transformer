@@ -17,16 +17,15 @@ from game.state.game_state_play import PlayCardAction
 
 from model.player import Player
 
-
 POSSIBLE_CHAMPIONSHIPS = ["wc", "bl", "gc", "gtc", "rc"]
 
 
 # To see more detailed description of raw data, read README.md in data.
-def get_game(championship="wc",
-             games_indices=slice(0, -1),
-             include_grand=False,
-             include_surr=False
-             ) -> Tuple[np.ndarray, np.ndarray]:
+def get_games(championship="wc",
+              games_indices=slice(0, -1),
+              include_grand=False,
+              include_surr=False
+              ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Reads in championships stored in CSV format in data folder.
 
@@ -128,7 +127,6 @@ def get_states_actions_rewards(
         include_grand=False,
         include_surr=False
 ):
-
     """
     Load championship log data from csv files, replay the games, while at the same time transforming it into our
     state, action and reward representation.
@@ -151,10 +149,10 @@ def get_states_actions_rewards(
     """
 
     # load the meta information, initial card configuration (meta_and_cards) and the course of the game (skat_and_cs)
-    meta_and_cards, skat_and_cs = get_game(championship=championship,
-                                           games_indices=games_indices,
-                                           include_grand=include_grand,
-                                           include_surr=include_surr)
+    meta_and_cards, skat_and_cs = get_games(championship=championship,
+                                            games_indices=games_indices,
+                                            include_grand=include_grand,
+                                            include_surr=include_surr)
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(card_enc)
 
@@ -185,7 +183,7 @@ def get_states_actions_rewards(
         for i in perspective:
 
             if skip:
-                # TODO: breaks out of non existing games
+                # TODO: breaks out of games which have been discarded in get_games
                 skip = False
                 print(f"broke out of game {game[0]}")
                 card_error_games.append(game[0])
@@ -329,7 +327,7 @@ def get_states_actions_rewards(
                     put_card = [0]
 
                 # first game state + game_level_bonus
-                game_state = pos_p + put_card  + score + trump_enc + last_trick + open_cards \
+                game_state = pos_p + put_card + score + trump_enc + last_trick + open_cards \
                              + get_hand_cards(current_player, encoding=card_enc)
 
                 # ...put down Skat one by one
@@ -362,7 +360,7 @@ def get_states_actions_rewards(
                     last_trick = convert_card_to_enc(skat1, encoding=card_enc) + [0] * card_dim + [0] * card_dim
 
                     # + game_level_bonus
-                    game_state += pos_p + put_card  + score + trump_enc + last_trick + open_cards + get_hand_cards(
+                    game_state += pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
                         current_player, encoding=card_enc)
 
                     # categorical encoding of played card as action: put second card
@@ -402,7 +400,7 @@ def get_states_actions_rewards(
                     rewards += [0, 0]
 
                     # + game_level_bonus
-                    game_state += pos_p + put_card  + score + trump_enc + last_trick + open_cards + get_hand_cards(
+                    game_state += pos_p + put_card + score + trump_enc + last_trick + open_cards + get_hand_cards(
                         current_player, encoding=card_enc)
 
                     try:
@@ -436,11 +434,11 @@ def get_states_actions_rewards(
 
                 # if hand is played, there are two identical game states from the perspective of every player
                 # + game_level_bonus
-                game_state = pos_p + put_card  + score + trump_enc + last_trick + open_cards \
+                game_state = pos_p + put_card + score + trump_enc + last_trick + open_cards \
                              + get_hand_cards(current_player, encoding=card_enc)
 
                 # + game_level_bonus
-                game_state += pos_p + put_card  + score + trump_enc + last_trick + open_cards \
+                game_state += pos_p + put_card + score + trump_enc + last_trick + open_cards \
                               + get_hand_cards(current_player, encoding=card_enc)
 
             # declare the game variant
@@ -636,7 +634,7 @@ if __name__ == '__main__':
     # point_rewards = True
     print(f"Reading in championship {championship}...")
 
-    for point_rewards in [True, False]:
+    for point_rewards in [True]:
         for enc in card_encodings:
             print(f"...with encoding {enc}...")
             # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)

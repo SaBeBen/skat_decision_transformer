@@ -1020,6 +1020,7 @@ class Env:
         :param current_player_id: current player to evaluate game end for.
         :return: player receiving points and discounted list points
         """
+
         if current_player_id != self.game.get_declarer().id:
             skat_points = Card.get_value(self.game.skat[0]) + Card.get_value(self.game.skat[1])
             if sum(self.online_score[1]) != 120:

@@ -92,7 +92,7 @@ print(head)
 """The table dataset follows"""
 
 table_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-               f"data/{championship}_table.CSV"
+             f"data/{championship}_table.CSV"
 
 table_data = pd.read_csv(table_path, header=None)
 
@@ -125,7 +125,7 @@ print(head)
 """The game dataset follows"""
 
 game_path = f"C:/Users/sasch/Desktop/Uni/Bachelorarbeit/SaschaBenz/software/skat_decision_transformer/" \
-               f"data/{championship}_game.CSV"
+            f"data/{championship}_game.CSV"
 
 game_data = pd.read_csv(game_path, header=None)
 
@@ -238,7 +238,7 @@ print(cs_data.shape[0])
 cs_and_game_data = pd.merge(game_data, cs_data, how="inner", on="GameID")
 
 # %%
-
+# only get the surrendered games from the merged dataset
 surrendered = cs_and_game_data[(cs_and_game_data["SurrenderedAt"] > -1)]
 
 sur_and_null = cs_and_game_data[
@@ -252,35 +252,77 @@ sur_and_ouvert = cs_and_game_data[
     (cs_and_game_data["SurrenderedAt"] > -1) &
     (cs_and_game_data["Ouvert"] == 1)]
 
-game_variants_sur = cs_and_game_data[(cs_and_game_data["SurrenderedAt"] > -1)]["Game"].value_counts(normalize=True)
-game_variants_sur = game_variants_sur.rename(
+# get the game variants from the surrendered games
+game_variants_sur_stat = surrendered["Game"].value_counts(normalize=True)
+
+# %%
+# Which game variant was played when surrendering?
+game_variants_sur_stat = game_variants_sur_stat.rename(
     index={24: "Grand", 12: "Cross", 11: "Spades", 10: "Hearts", 9: "Diamonds", 0: "AllPassed", 23: "Null",
            46: "Null Ouvert", 59: "Null Ouvert Hand", 35: "Null Hand"})
 
-# %%
+game_variants_sur_stat["Null"] += game_variants_sur_stat["Null Ouvert"] + game_variants_sur_stat["Null Hand"] + \
+                                  game_variants_sur_stat["Null Ouvert Hand"]
+game_variants_sur_stat = game_variants_sur_stat.drop(labels=["Null Ouvert", "Null Hand", "Null Ouvert Hand"])
 
-game_level_sur_values = cs_and_game_data[(cs_and_game_data["SurrenderedAt"] > -1)].loc[:, "Hand":"Ouvert"]
-
-# the configurations of Hand, Schneider, SchneiderCalled, Schwarz, SchwarzCalled, Ouvert of surrendered Games
-# 0/0/0/0/0/0 means nothing was called
-game_level_sur_conf = game_level_sur_values.value_counts(normalize=True)
-
-# %%
-
-game_variants_sur.plot(kind="pie", y="Game", autopct='%1.0f%%')
-plt.ylabel("Surrendered Games")
+game_variants_sur_stat.plot(kind="pie", y="Game", autopct='%1.0f%%')
+plt.ylabel("Surrendered Games", labelpad=20)
 
 plt.savefig(f"graphics/sur_games_pie_{championship}.png")
 plt.show()
 
 # %%
-amount_sur = surrendered.shape[0]
+# How many games of the surrendered suit games were won?
+game_variants_sur_suit = surrendered[(surrendered["Game"] == 12)
+                                     | (surrendered["Game"] == 11)
+                                     | (surrendered["Game"] == 10)
+                                     | (surrendered["Game"] == 9)]
 
-amount_sur_and_null = sur_and_null.shape[0]
+game_variants_sur_suit_stat = game_variants_sur_suit["Won"].value_counts(normalize=True)
 
-amount_sur_and_ouvert = sur_and_ouvert.shape[0]
+game_variants_sur_suit_stat = game_variants_sur_suit_stat.rename(
+    index={1: "Won", 0: "Lost"})
 
-ratio_surrendered_null = amount_sur - amount_sur_and_null
+game_variants_sur_suit_stat.plot(kind="pie", y="Won", autopct='%1.0f%%')
+plt.ylabel("Declarer in Surrendered Games", labelpad=10)
+plt.savefig(f"graphics/sur_suit_games_pie_{championship}.png")
+plt.show()
+
+# %%
+# Which level was achieved when the defenders surrendered?
+game_variants_sur_suit_level = game_variants_sur_suit[(game_variants_sur_suit["Won"] == 1)]
+
+game_variants_sur_suit_level = game_variants_sur_suit_level.loc[:, "Hand":"Ouvert"]
+
+game_variants_sur_suit_level_stat = game_variants_sur_suit_level.value_counts(normalize=True)
+
+game_variants_sur_suit_level_stat[(1, 1, 0, 0, 0, 0)] += game_variants_sur_suit_level_stat[(0, 1, 0, 1, 0, 0)] \
+                                                         + game_variants_sur_suit_level_stat[(1, 1, 0, 1, 0, 0)] \
+                                                         + game_variants_sur_suit_level_stat[(1, 1, 1, 0, 0, 0)] \
+                                                         + game_variants_sur_suit_level_stat[(1, 1, 1, 1, 0, 0)] \
+                                                         + game_variants_sur_suit_level_stat[(1, 1, 1, 1, 1, 1)]
+
+levels = ['None', 'Schneider', 'Hand', 'Other']
+
+game_variants_sur_suit_level_stat = pd.DataFrame([[game_variants_sur_suit_level_stat[(0, 0, 0, 0, 0, 0)]],
+                                                 [game_variants_sur_suit_level_stat[(0, 1, 0, 0, 0, 0)]],
+                                                 [game_variants_sur_suit_level_stat[(1, 0, 0, 0, 0, 0)]],
+                                                 [game_variants_sur_suit_level_stat[(1, 1, 0, 0, 0, 0)]]],
+                                                 levels,  ["Level"])
+
+game_variants_sur_suit_level_stat.plot(kind="pie", y="Level", autopct='%1.0f%%')
+plt.ylabel("Additional Achieved Level in Suit Surrender", labelpad=0)
+plt.legend("", frameon=False)
+plt.savefig(f"graphics/sur_suit_level_games_pie_{championship}.png")
+plt.show()
+
+# %%
+# What was called when surrendering?
+game_level_sur_values = cs_and_game_data[(cs_and_game_data["SurrenderedAt"] > -1)].loc[:, "Hand":"Ouvert"]
+
+# the configurations of Hand, Schneider, SchneiderCalled, Schwarz, SchwarzCalled, Ouvert of surrendered Games
+# 0/0/0/0/0/0 means nothing was called
+game_level_sur_conf = game_level_sur_values.value_counts(normalize=True)
 
 # %%
 

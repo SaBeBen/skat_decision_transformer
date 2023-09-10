@@ -85,17 +85,16 @@ def plot_tb(run_ids, tags, convert_tb_to_csv=False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Convert tensorboard data to csv.')
 
-    run_ids = ["games_0-20000-encoding_one-hot-point_rewards_True-card_put-pure_loss-no_gas-Fri_Sep__8_14-32-58_2023",
-               "games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-20-39_2023",
+    run_ids = ["games_0-20000-mask_loss_output-240-no_gas-Sun_Sep_10_01-58-14_2023",
+               "games_0-20000-not_masked-240-no_gas-Sun_Sep_10_02-07-09_2023",
                # "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-20-39_2023",
-
                ]
 
     tags = [
-        # "train/probability_of_correct_action", "train/loss", "eval/prob_correct_action", "train/rate_oob_actions",
-        #    "train/rate_wrong_action_taken",
+        "train/probability_of_correct_action", "train/loss", "eval/prob_correct_action", "train/rate_oob_actions",
+           "train/rate_wrong_action_taken",
         "eval/prob_correct_action", "eval/rate_wrong_action_taken",
-        "eval/loss: "
+        "eval/loss"
     ]
 
     parser.add_argument(
