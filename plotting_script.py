@@ -1,6 +1,8 @@
 import argparse
 import os
+import time
 
+import numpy as np
 from tensorboard.backend.event_processing import event_accumulator
 import pandas as pd
 import seaborn as sns
@@ -20,7 +22,7 @@ def tensorboard_logs_to_df(log_dir, mode=None):
     tags = tags[:13]
 
     if mode is None:
-        mode = log_dir.split("True-")[1]
+        mode = log_dir.split("games_0-10000-")[1].split("-wo_mask")[0]
 
     for tag in tags:
         events = event_acc.Scalars(tag)
@@ -35,18 +37,16 @@ def tensorboard_logs_to_df(log_dir, mode=None):
     return df
 
 
-def plot_tb(run_ids, tags, convert_tb_to_csv=False):
-    # run_ids = "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_00-02-44_2023"
-
+def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
     df = pd.DataFrame([])
 
-    mode = ["Masking", "No Masking"]
+    # mode = ["Masking", "No Masking"]
     i = 0
 
     for run_id in run_ids:
         log_dir = f'tensorboard_graphs/{run_id}'
 
-        log_df = tensorboard_logs_to_df(log_dir, mode[i])
+        log_df = tensorboard_logs_to_df(log_dir, None)
         i += 1
 
         df = pd.concat([df, log_df])
@@ -58,9 +58,11 @@ def plot_tb(run_ids, tags, convert_tb_to_csv=False):
     for tag_name in tags:
         df_tag = df[df['tag'] == tag_name].explode(['step', 'value'])
 
-        output_csv_file = f'plots/{tag_name}_{run_ids}.csv'
+        output_csv_file = f'{output_dir}/csv/{name}_{tag_name}.csv'
 
-        if convert_tb_to_csv:
+        if convert_tb_to_csv and not (output_dir is None):
+            if not os.path.exists(f"{output_dir}/csv/{name}"):
+                os.makedirs(f"{output_dir}/csv/{name}")
             df.to_csv(output_csv_file, index=False)
 
         sns.lineplot(
@@ -71,7 +73,19 @@ def plot_tb(run_ids, tags, convert_tb_to_csv=False):
         )
 
         plt.xlabel('Step')
-        plt.ylabel(tag_name)
+        plt.ylabel(tag_name.split("/")[1])
+
+        new_xticks = np.arange(0, 180000, 50000)  # Adjust the step size here
+        plt.xticks(new_xticks)
+
+        if not (output_dir is None):
+            # Create dir if not existent
+            if not os.path.exists(f'{output_dir}/plots/{name}_{tag_name.split("/")[0]}'):
+                os.makedirs(f'{output_dir}/plots/{name}_{tag_name.split("/")[0]}')
+
+            plt.savefig(f'{output_dir}/plots/{name}_{tag_name}_plot.svg',
+                        format='svg',
+                        bbox_inches='tight')
         # plt.title(f'{tag_name} over Steps')
         plt.show()
 
@@ -83,44 +97,49 @@ def plot_tb(run_ids, tags, convert_tb_to_csv=False):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Convert tensorboard data to csv.')
+    parser = argparse.ArgumentParser(description='Plot Tensorboard logs')
 
-    run_ids = ["games_0-20000-mask_loss_output-240-no_gas-Sun_Sep_10_01-58-14_2023",
-               "games_0-20000-not_masked-240-no_gas-Sun_Sep_10_02-07-09_2023",
+    run_ids = [
+               "games_0-10000-one-hot-wo_mask-card_put-Mon_Sep_11_23-59-52_2023",
+                "games_0-10000-mixed-wo_mask-card_put-Mon_Sep_11_23-57-37_2023"
+               # "games_0-20000-maks-gamma-1-Sun_Sep_10_15-51-07_2023",
+               # "games_0-20000-not_masked-240-no_gas-Sun_Sep_10_02-07-09_2023",
                # "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-20-39_2023",
                ]
 
     tags = [
         "train/probability_of_correct_action", "train/loss", "eval/prob_correct_action", "train/rate_oob_actions",
-           "train/rate_wrong_action_taken",
+        "train/rate_wrong_action_taken",
         "eval/prob_correct_action", "eval/rate_wrong_action_taken",
         "eval/loss"
     ]
-
+    parser.add_argument(
+        "--tags", nargs="+", type=str, default=tags,
+        help="Tags to include in the plots. Should be present in logs.",
+    )
     parser.add_argument(
         "--run_ids", type=str, nargs="+", default=run_ids,
         help="Run ids of the experiments. The run id is the name of the folder containing the tensorboard files.",
     )
     parser.add_argument(
-        "--input-folder", "-i", type=str, default=os.path.join(os.path.dirname(SKAT_DT_ROOT), "training-outputs"),
-        help="Path to runs folder of the human-robot-gym repository.",
+        "--input_dir", type=str, default=os.path.join(os.path.dirname(SKAT_DT_ROOT), "training-outputs"),
+        help="Directory where runs are stored in tensorboard logging folders.",
     )
     parser.add_argument(
-        "--output-folder", "-o", type=str, default="csv/raw",
-        help="Path to output folder. The csv files will be saved in this folder.",
+        "--output_dir", type=str, default="./plots",
+        help="Directory to write to. If none, does not save csv or plot.",
     )
+    current_time = time.asctime().replace(':', '-').replace(' ', '_')
     parser.add_argument(
-        "--tags", "-t", type=str, nargs="*", default=tags,
-        help="List of tags to include in the csv file. If not specified, all tags will be included.",
-    )
-    parser.add_argument(
-        "--merged", "-m", action="store_true",
-        help="If specified, the csv files off all tags will be merged into one file.",
+        "--plot_name", type=str, default="comp_one-hot_mixed",# f"{current_time}",
+        help="Name of plot.",
     )
 
     args = vars(parser.parse_args())
 
     plot_tb(
+        name=args['plot_name'],
         run_ids=args['run_ids'],
-        tags=args['tags']
+        tags=args['tags'],
+        output_dir=args['output_dir'],
     )

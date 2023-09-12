@@ -214,11 +214,11 @@ game_variants["Null"] += game_variants["Null Ouvert"] + game_variants["Null Hand
 game_variants = game_variants.drop(labels=["Null Ouvert", "Null Hand", "Null Ouvert Hand"])
 
 # %%
-
-# Create a pie plot showing the relative occurrence of game variants in all games
-game_variants.plot(kind="pie", y="Game", autopct='%1.0f%%')
-plt.ylabel(f"All Games of {championship}")
-plt.savefig(f"graphics/all_games_pie_{championship}.png")
+# Create a bar plot showing the relative occurrence of game variants in all games
+colors = ["red", "green", "blue", "grey", "orange", "black", "purple"]
+game_variants.plot(kind="bar", y="Game", color=colors)
+plt.ylabel(f"Games of {championship} in %")
+plt.savefig(f"graphics/all_games_bar_{championship}.png")
 plt.show()
 
 # %%
@@ -265,7 +265,7 @@ game_variants_sur_stat["Null"] += game_variants_sur_stat["Null Ouvert"] + game_v
                                   game_variants_sur_stat["Null Ouvert Hand"]
 game_variants_sur_stat = game_variants_sur_stat.drop(labels=["Null Ouvert", "Null Hand", "Null Ouvert Hand"])
 
-game_variants_sur_stat.plot(kind="pie", y="Game", autopct='%1.0f%%')
+game_variants_sur_stat.plot(kind="pie", y="Game")
 plt.ylabel("Surrendered Games", labelpad=20)
 
 plt.savefig(f"graphics/sur_games_pie_{championship}.png")
@@ -283,7 +283,7 @@ game_variants_sur_suit_stat = game_variants_sur_suit["Won"].value_counts(normali
 game_variants_sur_suit_stat = game_variants_sur_suit_stat.rename(
     index={1: "Won", 0: "Lost"})
 
-game_variants_sur_suit_stat.plot(kind="pie", y="Won", autopct='%1.0f%%')
+game_variants_sur_suit_stat.plot(kind="bar", y="Won")
 plt.ylabel("Declarer in Surrendered Games", labelpad=10)
 plt.savefig(f"graphics/sur_suit_games_pie_{championship}.png")
 plt.show()
@@ -294,26 +294,45 @@ game_variants_sur_suit_level = game_variants_sur_suit[(game_variants_sur_suit["W
 
 game_variants_sur_suit_level = game_variants_sur_suit_level.loc[:, "Hand":"Ouvert"]
 
-game_variants_sur_suit_level_stat = game_variants_sur_suit_level.value_counts(normalize=True)
+game_variants_sur_suit_level_stat = game_variants_sur_suit_level.value_counts(normalize=True) * 100
 
+# Accumulate small values
 game_variants_sur_suit_level_stat[(1, 1, 0, 0, 0, 0)] += game_variants_sur_suit_level_stat[(0, 1, 0, 1, 0, 0)] \
                                                          + game_variants_sur_suit_level_stat[(1, 1, 0, 1, 0, 0)] \
                                                          + game_variants_sur_suit_level_stat[(1, 1, 1, 0, 0, 0)] \
                                                          + game_variants_sur_suit_level_stat[(1, 1, 1, 1, 0, 0)] \
                                                          + game_variants_sur_suit_level_stat[(1, 1, 1, 1, 1, 1)]
 
+# %%
 levels = ['None', 'Schneider', 'Hand', 'Other']
 
 game_variants_sur_suit_level_stat = pd.DataFrame([[game_variants_sur_suit_level_stat[(0, 0, 0, 0, 0, 0)]],
-                                                 [game_variants_sur_suit_level_stat[(0, 1, 0, 0, 0, 0)]],
-                                                 [game_variants_sur_suit_level_stat[(1, 0, 0, 0, 0, 0)]],
-                                                 [game_variants_sur_suit_level_stat[(1, 1, 0, 0, 0, 0)]]],
-                                                 levels,  ["Level"])
+                                                  [game_variants_sur_suit_level_stat[(0, 1, 0, 0, 0, 0)]],
+                                                  [game_variants_sur_suit_level_stat[(1, 0, 0, 0, 0, 0)]],
+                                                  [game_variants_sur_suit_level_stat[(1, 1, 0, 0, 0, 0)]]],
+                                                 levels, ["Level"])
 
-game_variants_sur_suit_level_stat.plot(kind="pie", y="Level", autopct='%1.0f%%')
-plt.ylabel("Additional Achieved Level in Suit Surrender", labelpad=0)
-plt.legend("", frameon=False)
-plt.savefig(f"graphics/sur_suit_level_games_pie_{championship}.png")
+game_variants_sur_suit_level_stat = game_variants_sur_suit_level_stat
+game_variants_sur_suit_level_stat = game_variants_sur_suit_level_stat.sort_values(by='Level', ascending=False)
+
+data_temp = {
+    "Level": levels,
+    "Relative amount": game_variants_sur_suit_level_stat.Level[0:4]
+}
+
+df_vssl = pd.DataFrame(data_temp)
+
+# %%
+fig, ax = plt.subplots()
+colors = ['red', 'blue', 'green', 'orange']
+
+bars = ax.bar(df_vssl["Level"], df_vssl["Relative amount"], color=colors)
+
+ax.set_xlabel('Additional level achieved')
+ax.set_ylabel('Occurrences in surrendered suit games in %')
+# ax.set_title('Additional level achieved in surrendered suit games')
+
+plt.savefig(f"graphics/sur_suit_level_games_bar_{championship}.png")
 plt.show()
 
 # %%

@@ -37,15 +37,19 @@ class GameStatePlay(GameState):
     def check_valid_card_play(self, player, card):
         # check if player holding this card
         if not player.has_card(card):
+            print("Player " + player.name + " isn't holding the card " + str(card) + ".")
             raise InvalidPlayerMove("Player " + player.name + " isn't holding the card " + str(card) + ".")
         # check if player already played a card to current trick
         if self.game.trick.has_already_played_card(player):
+            print("Player " + player.name + " already played a card to the trick.")
             raise InvalidPlayerMove("Player " + player.name + " already played a card to the trick.")
         # check if this is players turn or waiting for another player to play his card before
         if not self.game.trick.can_move(player):
+            print("It's not player " + player.name + "s move.")
             raise InvalidPlayerMove("It's not player " + player.name + "s move.")
         # check if player can play this card
         if not self.game.trick.is_valid_card_move(self.game.game_variant, player, card):
+            print("Card " + str(card) + " is not a valid move by player " + player.name)
             raise InvalidPlayerMove("Card " + str(card) + " is not a valid move by player " + player.name)
 
     def finish_trick(self):

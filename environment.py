@@ -41,9 +41,8 @@ def get_dims_in_enc(encoding: str) -> Tuple[int, int, int]:
         raise NotImplementedError(f"The encoding {encoding} is not supported. Supported encodings are "
                                   f"'mixed', 'one-hot', 'mixed_comp' and one-hot_comp.")
 
-    # position co-player (3) + put_card (1) + game_level_bonus (1) + score (2) + trump (4) + last trick (3 * card_dim)
+    # position co-player (3) + put_card (1) + score (2) + trump (4) + last trick (3 * card_dim)
     # + open cards (2 * card_dim) + padded hand cards (12 * card_dim)
-    # + 1
     state_dim = 3 + 1 + 2 + 4 + 3 * card_dim + 2 * card_dim + max_hand_len
 
     return card_dim, max_hand_len, state_dim

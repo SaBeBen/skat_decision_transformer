@@ -161,7 +161,7 @@ class TrainableDT(DecisionTransformerModel):
         # If (open suit is on hand) or (trump is played and are jacks on hand)?
         # If yes -> valid actions are all cards with same suit or jacks when trump is lying
         # If not -> valid actions are all cards on the hand (called "in bounds")
-
+        #
         # if states.shape[0] == batch_size:
         trump_enc = states[:, :, 6:10]
 
@@ -235,7 +235,7 @@ class TrainableDT(DecisionTransformerModel):
 
         # mask all actions were no card can be played, 1 if it can be played, 0 if not
         # e.g. in Hand games, as defenders in first two tricks (or side effect: due to the attention_mask)
-        put_card_mask = states[:, :, 3].bool().to(self.device)
+        put_card_mask_zeros = states[:, :, 3].bool().to(self.device)
 
         # # starting from here until the loss fct, the loss is calculated
 
@@ -243,11 +243,11 @@ class TrainableDT(DecisionTransformerModel):
 
         # action_targets_masked = actions * put_card_mask.unsqueeze(2).repeat(1, 1, 12) * playable_cards
 
-        # put_card_mask = put_card_mask.unsqueeze(2).repeat(1, 1, 12).to(dtype=self.dtype)  # fp16 compatibility
-        # put_card_mask = (1.0 - put_card_mask) * torch.finfo(self.dtype).min
+        put_card_mask_zeros = put_card_mask_zeros.unsqueeze(2).repeat(1, 1, 12).to(dtype=self.dtype)  # fp16 compatibility
+        put_card_mask = (1.0 - put_card_mask_zeros) * torch.finfo(self.dtype).min
 
         # TODO: comment when wanting to train without a mask
-        # action_preds = possible_action_preds  # + put_card_mask
+        action_preds = possible_action_preds + put_card_mask
 
         # apply mask whether a card should be played based on game timestep
         # action_preds = possible_action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
@@ -256,15 +256,7 @@ class TrainableDT(DecisionTransformerModel):
         # mask_wo_zeros = action_preds.sum(dim=1)
         # mask_wo_zeros = mask_wo_zeros > 0
 
-        # when argmax takes 0 actions it selects the first element as maximum -> there is no 1 -> inf loss
-        # --> as the loss only looks at the ground truth, and we mask 0 actions, we throw out the 0 actions for the loss
-        # effectively the same as put_card_mask
-        # mask_wo_zeros = action_targets_masked.sum(dim=1)
-        # mask_wo_zeros = mask_wo_zeros > 0
-        #
-        # # mask the targets and preds
-        # targets_wo_zeros = action_targets_masked[mask_wo_zeros]
-        # preds_wo_zeros = action_preds_masked[mask_wo_zeros]
+
 
         sm = torch.nn.Softmax(dim=2)
         action_preds_output = sm(action_preds)
@@ -283,11 +275,21 @@ class TrainableDT(DecisionTransformerModel):
         action_targets_masked = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
         action_preds_masked = action_preds_ls.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
 
+        # when argmax takes 0 actions it selects the first element as maximum -> there is no 1 -> inf loss
+        # --> as the loss only looks at the ground truth, and we mask 0 actions, we throw out the 0 actions for the loss
+        # effectively the same as put_card_mask
+        mask_wo_zeros = action_targets_masked.sum(dim=1)
+        mask_wo_zeros = mask_wo_zeros > 0
+
+        # mask the targets and preds
+        targets_wo_zeros = action_targets_masked[mask_wo_zeros]
+        preds_wo_zeros = action_preds_masked[mask_wo_zeros]
+
         nll_loss_fct = torch.nn.NLLLoss()
-        loss_pure = nll_loss_fct(action_preds_masked, torch.argmax(action_targets_masked, dim=1))
+        loss_pure = nll_loss_fct(preds_wo_zeros, torch.argmax(targets_wo_zeros, dim=1))
         loss = loss_pure
 
-        action_preds = action_preds_output  # * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
+        action_preds = action_preds_output * put_card_mask_zeros
 
         # for evaluation and online training
         if not return_dict:

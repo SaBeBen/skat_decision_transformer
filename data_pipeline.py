@@ -97,7 +97,7 @@ def get_games(championship="wc",
         & (skat_game_data["Game"] != 46)
         & (skat_game_data["Game"] != 59)]
 
-    # get rid of certain games by merging
+    # get rid of games that only exist in one of the tables by merging (can occur in inconsistent data)
     merged_game = pd.merge(skat_game_data, skat_cs_data, how="inner", on="GameID")
 
     merged_game = merged_game.iloc[games_indices]
@@ -183,9 +183,9 @@ def get_states_actions_rewards(
         for i in perspective:
 
             if skip:
-                # TODO: breaks out of games which have been discarded in get_games
+                # handling of malicious logging in data
                 skip = False
-                print(f"broke out of game {game[0]}")
+                print(f"broke out of game {game[0]} at cs_index {cs_index}")
                 card_error_games.append(game[0])
                 break
 
@@ -341,15 +341,40 @@ def get_states_actions_rewards(
                     try:
                         cat_action[current_player.cards.index(skat1)] = 1
                         actions.append(cat_action)
-                    except ValueError:
-                        skip = True
+                    except:  # ValueError:
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards,
+                                          state_dim)
+                        # in the end of each game, insert the states, actions and rewards
+                        # with composite primary keys game_id and player perspective
+                        # (1: forehand, 2: middle-hand, 3: rear-hand)
+                        # insert states
+                        game_state_table[3 * cs_index + i] = np.array_split(np.array(game_state, dtype=np.int16),
+                                                                            ACT_DIM)
+                        # insert actions
+                        actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
+                        # insert rewards
+                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
                         break
 
                     try:
                         # put down first Skat card in the environment
                         env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down[0]))
-                    except ValueError or InvalidPlayerMove:
+                    except:  # ValueError or InvalidPlayerMove:
                         skip = True
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards,
+                                          state_dim)
+                        # in the end of each game, insert the states, actions and rewards
+                        # with composite primary keys game_id and player perspective
+                        # (1: forehand, 2: middle-hand, 3: rear-hand)
+                        # insert states
+                        game_state_table[3 * cs_index + i] = np.array_split(np.array(game_state, dtype=np.int16),
+                                                                            ACT_DIM)
+                        # insert actions
+                        actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
+                        # insert rewards
+                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
                         break
 
                     # the soloist knows how many points he possesses through the Skat,
@@ -368,15 +393,41 @@ def get_states_actions_rewards(
                     try:
                         cat_action[current_player.cards.index(skat2)] = 1
                         actions.append(cat_action)
-                    except ValueError:
+                    except:  # ValueError:
                         skip = True
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards,
+                                          state_dim)
+                        # in the end of each game, insert the states, actions and rewards
+                        # with composite primary keys game_id and player perspective
+                        # (1: forehand, 2: middle-hand, 3: rear-hand)
+                        # insert states
+                        game_state_table[3 * cs_index + i] = np.array_split(np.array(game_state, dtype=np.int16),
+                                                                            ACT_DIM)
+                        # insert actions
+                        actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
+                        # insert rewards
+                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
                         break
 
                     try:
                         # put down second Skat card in the environment
                         env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down[1]))
-                    except ValueError or InvalidPlayerMove:
+                    except:  # ValueError or InvalidPlayerMove:
                         skip = True
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards,
+                                          state_dim)
+                        # in the end of each game, insert the states, actions and rewards
+                        # with composite primary keys game_id and player perspective
+                        # (1: forehand, 2: middle-hand, 3: rear-hand)
+                        # insert states
+                        game_state_table[3 * cs_index + i] = np.array_split(np.array(game_state, dtype=np.int16),
+                                                                            ACT_DIM)
+                        # insert actions
+                        actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
+                        # insert rewards
+                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
                         break
 
                     # the soloist knows how many points he possesses through the Skat,
@@ -406,8 +457,21 @@ def get_states_actions_rewards(
                     try:
                         # put Skat down in the environment
                         env.state_machine.handle_action(PutDownSkatAction(env.game.get_declarer(), skat_down))
-                    except ValueError or InvalidPlayerMove:
+                    except:  # ValueError or InvalidPlayerMove:
                         skip = True
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards,
+                                          state_dim)
+                        # in the end of each game, insert the states, actions and rewards
+                        # with composite primary keys game_id and player perspective
+                        # (1: forehand, 2: middle-hand, 3: rear-hand)
+                        # insert states
+                        game_state_table[3 * cs_index + i] = np.array_split(np.array(game_state, dtype=np.int16),
+                                                                            ACT_DIM)
+                        # insert actions
+                        actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
+                        # insert rewards
+                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
                         break
             else:
                 # if the game is surrendered instantly
@@ -473,8 +537,11 @@ def get_states_actions_rewards(
                         cat_action[current_player.cards.index(
                             convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1]))] = 1
                         actions.append(cat_action)
-                    except ValueError:
+                    except:  # ValueError:
                         skip = True
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                          state_dim)
                         break
 
                 try:
@@ -483,8 +550,11 @@ def get_states_actions_rewards(
                     env.state_machine.handle_action(
                         PlayCardAction(player=env.game.trick.leader,
                                        card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1])))
-                except ValueError or InvalidPlayerMove:
+                except:  # ValueError or InvalidPlayerMove:
                     skip = True
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                      state_dim)
                     break
 
                 # check if game was surrendered at this card
@@ -507,8 +577,11 @@ def get_states_actions_rewards(
                             current_player.cards.index(
                                 convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick]))] = 1
                         actions.append(cat_action)
-                    except ValueError:
+                    except:  # ValueError:
                         skip = True
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                          state_dim)
                         break
 
                 try:
@@ -517,8 +590,11 @@ def get_states_actions_rewards(
                     env.state_machine.handle_action(
                         PlayCardAction(player=env.game.trick.get_current_player(),
                                        card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick])))
-                except ValueError or InvalidPlayerMove:
+                except:  # ValueError or InvalidPlayerMove:
                     skip = True
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                      state_dim)
                     break
 
                 # check if game was surrendered at this card
@@ -541,8 +617,11 @@ def get_states_actions_rewards(
                         cat_action[current_player.cards.index(
                             convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1]))] = 1
                         actions.append(cat_action)
-                    except ValueError:
+                    except:  # ValueError:
                         skip = True
+                        game_state, actions, rewards = \
+                            env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                          state_dim)
                         break
 
                 try:
@@ -551,8 +630,11 @@ def get_states_actions_rewards(
                     env.state_machine.handle_action(
                         PlayCardAction(player=env.game.trick.get_current_player(),
                                        card=convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1])))
-                except ValueError or InvalidPlayerMove:
+                except:  # ValueError or InvalidPlayerMove:
                     skip = True
+                    game_state, actions, rewards = \
+                        env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
+                                      state_dim)
                     break
 
                 last_trick = convert_numerical_to_enc(
@@ -613,11 +695,14 @@ def get_states_actions_rewards(
 
         cs_index = cs_index + 1
 
+    first_states = [game_state_table[i][0] for i in range(len(game_state_table))]
+    # first_states = None
+
     return {
         "states": game_state_table,
         "actions": actions_table,
         "rewards": rewards_table,
-    }, card_error_games, [game_state_table[i][0] for i in range(len(game_state_table))], \
+    }, card_error_games, first_states, \
         meta_and_cards, actions_table, skat_and_cs
 
 
@@ -636,12 +721,12 @@ if __name__ == '__main__':
 
     for point_rewards in [True]:
         for enc in card_encodings:
-            print(f"...with encoding {enc}...")
+            print(f"...with {enc} encoding...")
             # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)
 
             data, _, _, _, _, _ = get_states_actions_rewards(championship,
-                                                             include_surr=True,
-                                                             include_grand=True,
+                                                             include_surr=False,
+                                                             include_grand=False,
                                                              games_indices=slice(0, -1),
                                                              point_rewards=point_rewards,
                                                              card_enc=enc)

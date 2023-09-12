@@ -68,7 +68,7 @@ class GameStateBid(GameState):
             self.game.skat.extend(cards_to_put)
             [player.cards.remove(card) for card in cards_to_put]
         else:
-            raise InvalidCardSize("Player has to put down exactly 2 cards not " + str(len(cards_to_put)))
+            raise InvalidCardSize("Player has to put down 1 or 2 cards not " + str(len(cards_to_put)))
 
     def declare_game(self, player, game_variant):
         if player.type is not Player.Type.DECLARER:
