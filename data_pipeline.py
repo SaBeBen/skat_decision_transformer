@@ -677,7 +677,7 @@ def get_states_actions_rewards(
                 if current_player.type == Player.Type.DECLARER:
                     # add the points to the soloist
                     rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1
-                elif env.game.has_declarer_won():
+                elif env.game.has_declarer_won(env.game.skat[0].get_value() + env.game.skat[1].get_value() ):
                     # give 40 discounted score points to the defenders after Fabian-Seeger score
                     rewards[-1] = 0.9 * 40 + rewards[-1] * 0.1
             else:
@@ -724,18 +724,35 @@ if __name__ == '__main__':
             print(f"...with {enc} encoding...")
             # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)
 
-            data, _, _, _, _, _ = get_states_actions_rewards(championship,
-                                                             include_surr=False,
-                                                             include_grand=False,
-                                                             games_indices=slice(0, -1),
-                                                             point_rewards=point_rewards,
-                                                             card_enc=enc)
+            data, _, first_states, meta_and_cards, actions_table, skat_and_cs = get_states_actions_rewards(
+                championship,
+                include_surr=False,
+                include_grand=False,
+                games_indices=slice(
+                    0, -1),
+                point_rewards=point_rewards,
+                card_enc=enc)
 
-            data_frame = pd.DataFrame(data)
 
-            data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
+            data_df = pd.DataFrame(data)
+            # first_states_df = np.repeat(first_states, 3, axis=0)
+            first_states_df = pd.DataFrame(first_states)
+            # to match the input of the games from every perspective
+            meta_and_cards = np.repeat(meta_and_cards, 3, axis=0)
+            meta_and_cards_df = pd.DataFrame(meta_and_cards)
+
+            # We only need the test portion of first states and meta_and_cards for the two online evaluations.
+            # We do not load the dataset from the disk in the manual evaluation, because the manual evaluation is
+            # only for a shallow analysis and debugging
+            data_train, data_test, _, first_states_test, _, meta_and_cards_test = train_test_split(
+                data_df, first_states_df, meta_and_cards_df, train_size=0.8, random_state=42)
+
+            # data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
 
             dataset = DatasetDict({"train": Dataset.from_dict(data_train),
-                                   "test": Dataset.from_dict(data_test)})
+                                   "test": Dataset.from_dict(data_test),
+                                   "first_states_test": Dataset.from_dict(first_states_test),
+                                   "meta_and_cards_test": Dataset.from_dict(meta_and_cards_test)
+                                   })
             dataset.save_to_disk(
                 f"./datasets/{championship}-surr_grand-pr_{point_rewards}-{enc}-card_put")

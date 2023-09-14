@@ -68,16 +68,16 @@ class Game:
             if player.type is Player.Type.DECLARER:
                 return player
 
-    def has_declarer_won(self):
+    def has_declarer_won(self, skat_points):
         # check overbid and bid variants
         if isinstance(self.game_variant, GameVariantNull):
             return self.get_declarer().sum_trick_values() == 0
-        if self.game_variant.get_level() > 2:
-            return self.get_declarer().sum_trick_values() == 120
-        elif self.game_variant.get_level() == 1:
-            return self.get_declarer().sum_trick_values() >= 30
+        if self.game_variant.has_called_schwarz():
+            return self.get_declarer().sum_trick_values() + skat_points == 120
+        elif self.game_variant.has_called_schneider():
+            return self.get_declarer().sum_trick_values() + skat_points >= 90
         else:
-            return self.get_declarer().sum_trick_values() > 60
+            return self.get_declarer().sum_trick_values() + skat_points > 60
 
     def create_deck(self):
         for suit in Card.Suit:

@@ -106,6 +106,12 @@ class GameVariantGrand(GameVariant):
     def get_variant_name(self):
         return "Grand"
 
+    def has_called_schneider(self):
+        return self.scheider_called
+
+    def has_called_schwarz(self):
+        return self.schwarz_called
+
 
 # ------------------------------------------------------------
 # Concrete game variant class for suit game
@@ -132,13 +138,14 @@ class GameVariantSuit(GameVariantGrand):
         return player.has_face(Card.Face.JACK) or player.has_suit(self.trump_suit)
 
     def get_trump(self):
-        return self.trump_suit.value + 9
+        return self.trump_suit
 
     def get_level(self):
         return self.peaks + self.ouvert + self.schwarz_called + self.scheider_called + self.hand
 
     def get_variant_name(self):
         return self.trump_suit.name
+
 
 
 # ------------------------------------------------------------

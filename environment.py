@@ -225,7 +225,11 @@ def initialise_hand_cards(game, current_player: Player, current_player2: Player,
 
 
 # calculates the win probability solely based on the starting hand cards of a player
-# a game is considered winnable if the kinback score of the own cards is at least 8.5 points
+# a game is considered winnable if the Kinback score of the own cards is at least 8.5 points
+# Thomas Kinback is aa professional Skat trainer, german and world champion.
+# This scheme is used to teach an assessment of the cards and is referrenced
+# by the official german Skat association (DSKV):
+# https://dskv.de/aktuelles/skat-coach-app/
 def calculate_kinback_scheme(hand_cards: List[Card], pos: int) -> Tuple[int, int]:
     kb_score = 0
 
@@ -442,27 +446,32 @@ class Env:
             # 1 for game, get_level includes "with" and "without" for suit games
             level = 1 + self.game.game_variant.get_level()
 
+            skat_points = self.game.skat[0].get_value() + self.game.skat[1].get_value()
+
             if current_player == self.game.get_declarer():
-                if self.game.has_declarer_won():
-                    if current_player.sum_trick_values() >= 90:
+                # include Skat points
+                card_points = current_player.sum_trick_values() + skat_points
+
+                if self.game.has_declarer_won(skat_points):
+                    if card_points >= 90:
                         # extra level for Schneider
                         level += 1
-                        if current_player.sum_trick_values() == 120:
+                        if card_points == 120:
                             # extra level for Schwarz
                             level += 1
                     # add 50 points for winning
                     game_points = base_value * level + 50
                 else:
                     # if declarer lost
-                    if current_player.sum_trick_values() <= 30:
+                    if card_points <= 30:
                         # extra level for Schneider lost
                         level += 1
-                        if current_player.sum_trick_values() == 0:
+                        if card_points == 0:
                             # extra level for Schwarz lost
                             level += 1
                     # ...deduct double the declared points and a malus of 50
                     game_points = base_value * level * (-2) - 50
-            elif not self.game.has_declarer_won() and current_player != self.game.get_declarer():
+            elif not self.game.has_declarer_won(skat_points) and current_player != self.game.get_declarer():
                 # we only consider a game of three players
                 game_points = 40
             else:
@@ -711,8 +720,8 @@ class Env:
 
         level = [self.game.game_variant.get_level()]
 
-        #+ level
-        game_state = self.pos_p + put_card  + self.score + self.trump_enc + self.\
+        # + level
+        game_state = self.pos_p + put_card + self.score + self.trump_enc + self. \
             last_trick + open_cards + get_hand_cards(self.current_player, encoding=self.enc)
 
         if self.skat_put[1] and not done:
@@ -845,7 +854,7 @@ class Env:
                 level = [self.game.game_variant.get_level()]
 
                 # + level
-                game_states[current_player_id] = self.pos_p[current_player_id] + put_card  + [0, 0] + self.\
+                game_states[current_player_id] = self.pos_p[current_player_id] + put_card + [0, 0] + self. \
                     trump_enc + last_trick + open_cards + get_hand_cards(self.game.players[current_player_id], self.enc)
 
         return np.array(game_states)
@@ -882,7 +891,7 @@ class Env:
                     put_card = [1]
 
                     self.game.game_variant = GameVariantSuit(
-                        get_game_variant(self.trump_enc, self.game.get_declarer().cards), hand=True)
+                        get_game_variant(self.trump_enc, self.game.get_declarer().cards).get_trump(), hand=True)
 
                     self.state_machine.handle_action(
                         DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))
@@ -992,7 +1001,7 @@ class Env:
 
         # put_card is always [1] after Skat putting. A possible surrender would pad everything to 0, including put_skat
         # + level
-        game_state = self.pos_p[current_player_id] + put_card + score + self.\
+        game_state = self.pos_p[current_player_id] + put_card + score + self. \
             trump_enc + padded_last_trick + padded_open_cards + get_hand_cards(
             self.game.players[current_player_id], self.enc)
 
@@ -1032,7 +1041,7 @@ class Env:
 
         game_points = self.get_game_points(current_player)
 
-        if current_player_id == self.game.get_declarer().id and game_points != 0:
+        if current_player_id == self.game.get_declarer().id and game_points > 0:
             if self.hand:
                 # add reward in hand game of two unseen Skat cards
                 reward += Card.get_value(self.game.skat[0]) + Card.get_value(self.game.skat[1])

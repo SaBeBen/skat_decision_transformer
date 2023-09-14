@@ -22,7 +22,8 @@ def tensorboard_logs_to_df(log_dir, mode=None):
     tags = tags[:13]
 
     if mode is None:
-        mode = log_dir.split("games_0-10000-")[1].split("-wo_mask")[0]
+        mode = log_dir.split("encoding_")[1].split("-po")[0]
+        #.split("-wo_mask")[0].capitalize().replace("_", " ").replace("comp", "comp.")
 
     for tag in tags:
         events = event_acc.Scalars(tag)
@@ -40,7 +41,6 @@ def tensorboard_logs_to_df(log_dir, mode=None):
 def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
     df = pd.DataFrame([])
 
-    # mode = ["Masking", "No Masking"]
     i = 0
 
     for run_id in run_ids:
@@ -69,13 +69,14 @@ def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
             data=df_tag,
             x='step',
             y='value',
-            hue='Encoding',
+            # hue='Encoding',
         )
 
         plt.xlabel('Step')
-        plt.ylabel(tag_name.split("/")[1])
+        ylabel = tag_name.split("/")[1].replace("_", " ").replace(": ", "").replace("prob ", "probability ").capitalize()
+        plt.ylabel(ylabel)
 
-        new_xticks = np.arange(0, 180000, 50000)  # Adjust the step size here
+        new_xticks = np.arange(0, 1200001, 400000)  # Adjust the step size here
         plt.xticks(new_xticks)
 
         if not (output_dir is None):
@@ -83,7 +84,7 @@ def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
             if not os.path.exists(f'{output_dir}/plots/{name}_{tag_name.split("/")[0]}'):
                 os.makedirs(f'{output_dir}/plots/{name}_{tag_name.split("/")[0]}')
 
-            plt.savefig(f'{output_dir}/plots/{name}_{tag_name}_plot.svg',
+            plt.savefig(f'{output_dir}/plots/{name}_{tag_name}_{name}_plot.svg',
                         format='svg',
                         bbox_inches='tight')
         # plt.title(f'{tag_name} over Steps')
@@ -99,19 +100,23 @@ def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Plot Tensorboard logs')
 
+    # possible existing run ids
     run_ids = [
-               "games_0-10000-one-hot-wo_mask-card_put-Mon_Sep_11_23-59-52_2023",
-                "games_0-10000-mixed-wo_mask-card_put-Mon_Sep_11_23-57-37_2023"
-               # "games_0-20000-maks-gamma-1-Sun_Sep_10_15-51-07_2023",
-               # "games_0-20000-not_masked-240-no_gas-Sun_Sep_10_02-07-09_2023",
-               # "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-20-39_2023",
-               ]
+        "games_0--1-encoding_one-hot-point_rewards_True-card_put-pure_loss-Thu_Sep__7_22-41-35_2023"
+        # "games_0-10000-one-hot-wo_mask-card_put-Mon_Sep_11_23-59-52_2023",
+        # "games_0-10000-mixed-wo_mask-card_put-Mon_Sep_11_23-57-37_2023",
+        # "games_0-10000-one-hot_comp-wo_mask-Wed_Sep_13_00-21-03_2023",
+        # "games_0-10000-mixed_comp-wo_mask-Wed_Sep_13_00-20-16_2023"
+        # "games_0-20000-masked-240-no_gas-Sun_Sep_10_01-58-14_2023",
+        # "games_0-20000-not_masked-240-no_gas-Sun_Sep_10_02-07-09_2023",
+        # "20000_one-hot/games_0-20000-encoding_one-hot-point_rewards_True-Tue_Sep__5_23-20-39_2023",
+    ]
 
     tags = [
         "train/probability_of_correct_action", "train/loss", "eval/prob_correct_action", "train/rate_oob_actions",
         "train/rate_wrong_action_taken",
         "eval/prob_correct_action", "eval/rate_wrong_action_taken",
-        "eval/loss"
+        "eval/loss: "
     ]
     parser.add_argument(
         "--tags", nargs="+", type=str, default=tags,
@@ -131,7 +136,7 @@ if __name__ == '__main__':
     )
     current_time = time.asctime().replace(':', '-').replace(' ', '_')
     parser.add_argument(
-        "--plot_name", type=str, default="comp_one-hot_mixed",# f"{current_time}",
+        "--plot_name", type=str, default="all_wc_games",  # f"{current_time}",
         help="Name of plot.",
     )
 

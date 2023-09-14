@@ -80,7 +80,6 @@ def run_training(args):
     load_dataset = games_to_load.stop == -1 or games_to_load.stop - games_to_load.start >= 10000
 
     if load_dataset:
-        # "wc-without_surr_and_passed-pr_True-one-hot"
         dataset = load_from_disk(f"./datasets/wc-without_surr_and_passed-pr_{point_rewards}-{hand_encoding}-card_put")
         amount_games = (games_to_load.stop - games_to_load.start) * 3  # * 3 for every perspective
         dataset['train'] = Dataset.from_dict(dataset['train'][:math.floor(amount_games * 0.8)])
@@ -259,7 +258,10 @@ def evaluate_in_env(model: TrainableDT,
 
     print("Manual evaluation started...")
 
+    # scale rewards for testing. Scales the achieved rewards r_t
     scale = 1
+
+    print(f"with scale {scale}")
 
     amount_games = math.floor(len(first_states) / 3)
 
@@ -404,7 +406,7 @@ def evaluate_in_env(model: TrainableDT,
 
 def run_online_eval(args):
     # game specific arguments
-    championship = args['championship']
+    championship = "gc"  # args['championship']
     hand_encoding = args['hand_encoding']
     point_rewards = args['point_rewards']
     perspective = args['perspective']
@@ -412,20 +414,28 @@ def run_online_eval(args):
     pretrained_model = args['pretrained_model']
 
     # possible additional scale, not used yet. Now scaling maximum reward with 2 (see eval_three_agents)
-    scale = 1
+    scale = 0.7
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
 
     # load model to play against
     pretrained_model = TrainableDT.from_pretrained(pretrained_model)
 
-    print("\nLoading data...")
-    data, _, first_states, meta_and_cards, actions_table, skat_and_cs = data_pipeline.get_states_actions_rewards(
+    # Model was trained on WC
+    # dataset = load_from_disk(f"./datasets/wc-without_surr_and_passed-pr_{point_rewards}-{hand_encoding}-card_put")
+    # amount_games = (games_to_load.stop - games_to_load.start) * 3  # * 3 for every perspective
+    # dataset['train'] = Dataset.from_dict(dataset['train'][:math.floor(amount_games * 0.8)])
+    # dataset['test'] = Dataset.from_dict(dataset['test'][:math.floor(amount_games * 0.2)])
+
+    print(f"\nLoading data from championship {championship}...")
+    data, _, first_states, meta_and_cards, _, _ = data_pipeline.get_states_actions_rewards(
         championship=championship,
         games_indices=games_to_load,
         point_rewards=point_rewards,
         perspective=perspective,
         card_enc=hand_encoding)
+
+    # first_state = data.iloc[0, 0][0]
 
     pretrained_model.config.state_dim = state_dim
 
@@ -435,7 +445,7 @@ def run_online_eval(args):
         point_reward=point_rewards,
         state_dim=state_dim,
         card_enc=hand_encoding,
-        games=games_to_load,
+        game_idx=games_to_load,
         meta_and_cards=meta_and_cards,
         first_game_states=first_states,
         scale=scale
@@ -457,7 +467,7 @@ def run_online_eval(args):
     print(results)
 
 
-def eval_three_agents(model, point_reward, state_dim, card_enc, games,
+def eval_three_agents(model, point_reward, state_dim, card_enc, game_idx,
                       meta_and_cards=None,
                       first_game_states=None,
                       scale=1):
@@ -482,7 +492,7 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, games,
     wins_declarer_ai = 0
     wins_defender_ai = 0
 
-    for j in tqdm(range(games.stop - games.start)):
+    for j in tqdm(range(game_idx.stop - game_idx.start)):
         env = Env(card_enc)
 
         games_idx = slice(3 * j, 3 * j + 3)
@@ -521,6 +531,8 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, games,
             else:
                 # if the reward are only the card points, set it
                 target_return[pl] = 2 * 120
+
+            target_return[pl] = target_return[pl] * scale
 
         target_return = torch.tensor(target_return).float().reshape(3, 1)
         states = torch.from_numpy(states).reshape(3, 1, state_dim).float()
@@ -633,7 +645,7 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, games,
                 # states[current_player] = torch.cat([states[current_player], cur_state], dim=0)
                 rewards[reward_player[0]][-1] = reward_player[1]
 
-            cur_pred_return = target_return[:, -1] - rewards[:, -1] / scale
+            cur_pred_return = target_return[:, -1] - rewards[:, -1]
             target_return = torch.cat([target_return, cur_pred_return.reshape(3, 1)], dim=1)
 
             # update all states after each trick for the hand cards, score and last_trick
@@ -687,12 +699,12 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, games,
 
 def play_with_two(args):
     # game specific arguments
-    championship = args['championship']
     hand_encoding = args['hand_encoding']
     point_rewards = args['point_rewards']
     human_position = args['play_as']
     pretrained_model = args['pretrained_model']
     amount_games = args['amount_games_to_play']
+    random_activated = args['random_player']
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
     # Load pre-trained model to play against
@@ -700,12 +712,30 @@ def play_with_two(args):
 
     pretrained_model.config.state_dim = state_dim
 
+    print(f"Playing against two agents")
+    if random_activated:
+        print("with a random player")
+    else:
+        print("interactively")
+
     results = play_with_two_agents(pretrained_model,
                                    point_reward=point_rewards,
                                    state_dim=state_dim,
                                    amount_games=amount_games,
-                                   human_player_start=human_position
+                                   human_player_start=human_position,
+                                   random_activated=random_activated
                                    )
+
+    results["AI"]["Declarer Points"] = results["AI"]["Declarer Points"] / amount_games
+    results["AI"]["Defender Points"] = results["AI"]["Defender Points"] / amount_games
+    results["AI"]["Wins of Declarer"] = results["AI"]["Wins of Declarer"] / amount_games
+    results["AI"]["Wins of Defenders"] = results["AI"]["Wins of Defenders"] / amount_games
+
+    results["Random Player"]["Declarer Points"] = results["Random Player"]["Declarer Points"] / amount_games
+    results["Random Player"]["Defender Points"] = results["Random Player"]["Defender Points"] / amount_games
+    results["Random Player"]["Wins of Declarer"] = results["Random Player"]["Wins of Declarer"] / amount_games
+    results["Random Player"]["Wins of Defenders"] = results["Random Player"]["Wins of Defenders"] / amount_games
+
     print(f"Performance of {amount_games} games: ")
     print(results)
 
@@ -715,8 +745,7 @@ def play_with_two_agents(model,
                          state_dim,
                          amount_games,
                          human_player_start,
-                         first_game_states=None,
-                         random_activated=True):
+                         random_activated=False):
     """
 
     :param model: Pre-trained model to use for the agents.
@@ -733,6 +762,8 @@ def play_with_two_agents(model,
     card_enc = "one-hot"
 
     scale = 1
+
+    print(f"with scale {scale}")
 
     declarer_points_ai, defender_points_ai, declarer_wins_ai, defender_wins_ai = 0, 0, 0, 0
 
@@ -780,7 +811,8 @@ def play_with_two_agents(model,
             else:
                 # if the reward are only the card points
                 target_return[pl] = 2 * 120
-        # target_return = 2 * 120
+
+            target_return[pl] = target_return[pl] * scale
 
         target_return = torch.tensor(target_return).float().reshape(3, 1)
         states = torch.from_numpy(states).reshape(3, 1, state_dim).float()
@@ -965,7 +997,8 @@ def play_with_two_agents(model,
                             action[card_index] = 1
 
                             if not random_activated:
-                                print(f"Player {current_player} plays {env.game.players[current_player].cards[card_index]}")
+                                print(f"Player {current_player, env.game.players[current_player].type}"
+                                      f" plays {env.game.players[current_player].cards[card_index]}")
                         else:
                             card_index = -1
                             if not random_activated:
@@ -991,8 +1024,9 @@ def play_with_two_agents(model,
 
             if t >= 2 and not random_activated:
                 last_trick = [entry[1] for entry in env.game.trick.leader.trick_stack[t - 1]]
-                print(f"Trick {t - 1} was won by {env.game.trick.leader.id}. "
-                      f"Cards were {last_trick}")
+                print(f'Trick {t - 1} was won by {env.game.trick.leader.id} '
+                      f'{"(you)" if env.game.trick.leader.id == human_player_id else ""}. '
+                      f'Cards were {last_trick}')
 
             # update all states after each trick for the hand cards, score and last_trick
             target_return = torch.cat([target_return, cur_pred_return], dim=1)
@@ -1004,8 +1038,15 @@ def play_with_two_agents(model,
         # get points of human
         _, _, game_points_human = env.finish_online_game(human_player_id)
 
+        dec_card_points = env.game.get_declarer().sum_trick_values() + env.game.skat[0].get_value() + env.game.skat[
+            1].get_value()
+
         # add stats for human player
         if human_player_id == env.game.get_declarer().id:
+            if not random_activated:
+                print(f"You (Player {human_player_id}) played as declarer. \n"
+                      f"You achieved {dec_card_points} card points.\n"
+                      f"{game_points_human} list points are added.")
             if game_points_human > 0:
                 declarer_wins_human += 1
             else:
@@ -1013,21 +1054,27 @@ def play_with_two_agents(model,
                 defender_points_ai += 40
             declarer_points_human += game_points_human
         else:
-            print(f"Agent {env.game.get_declarer().id} played as declarer")
+            if not random_activated:
+                print(f"Agent {env.game.get_declarer().id} played as declarer")
 
             # get the points for the declaring AI agent
             _, _, game_points_ai_dec = env.finish_online_game(env.game.get_declarer().id)
             if game_points_ai_dec > 0:
-                print(f" and won with {env.game.get_declarer().sum_trick_values()}")
+                if not random_activated:
+                    print(
+                        f" and won with {dec_card_points}, \n"
+                        f"+ {game_points_ai_dec} list points for him.")
                 declarer_wins_ai += 1
             else:
-                print(f" and lost with {env.game.get_declarer().sum_trick_values()}")
+                if not random_activated:
+                    print(f" and lost with {dec_card_points}, \n"
+                          f"{game_points_ai_dec} list points are added for him.")
                 # when a human wins with an Ai agent as defenders
                 defender_wins_human += 1
-                defender_points_human += 120 - game_points_ai_dec
+                defender_points_human += 40
                 defender_wins_ai += 1
                 # the defenders all receive the same score
-                defender_points_ai += 120 - game_points_ai_dec
+                defender_points_ai += 40
 
             declarer_points_ai += game_points_ai_dec
 
@@ -1038,7 +1085,7 @@ def play_with_two_agents(model,
 
     result = {
         "AI": [declarer_points_ai, defender_points_ai, declarer_wins_ai, defender_wins_ai],
-        "Human Player": [declarer_points_human, defender_points_human, declarer_wins_human, defender_wins_human]
+        "Random Player": [declarer_points_human, defender_points_human, declarer_wins_human, defender_wins_human]
     }
     result = pd.DataFrame(result, index=["Declarer Points", "Defender Points", "Wins of Declarer", "Wins of Defenders"])
 
@@ -1067,11 +1114,11 @@ if __name__ == '__main__':
                                             'their implementation '
                                             'https://github.com/kzl/decision-transformer/tree/master, as well as'
                                             ' Huggingface')
-    parser.add_argument('--championship', '-cs', type=str, default='wc', choices=['wc'],
-                        help='dataset of championship to select from. '
-                             'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
-                             ' contradictory.')
-    parser.add_argument('--games', type=int, default=(50000, 50118), nargs="+",
+    # parser.add_argument('--championship', '-cs', type=str, default='wc', choices=['wc'],
+    #                     help='dataset of championship to select from. '
+    #                          'Currently, only the world championship is available, as data of gc, gtc, bl and rc is'
+    #                          ' corrupted.')
+    parser.add_argument('--games', type=int, default=(0, 20000), nargs="+",
                         help='The games to load. Note that if this value surpasses 10 000, the game ids are ignored '
                              'and the games are randomly loaded from a dataset.')
     parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
@@ -1098,23 +1145,26 @@ if __name__ == '__main__':
     parser.add_argument('--save_model', type=bool, default=False,
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
-    parser.add_argument('--logging_steps', type=int, default=20)
+    parser.add_argument('--logging_steps', type=int, default=500)
     parser.add_argument('--eval_in_training', type=bool, default=True,
                         help="Whether to evaluate during training. Slows down training if activated."
                              "Evaluation takes place on the test portion of the dataset (#_games_to_load * 0.2).")
     parser.add_argument('--pretrained_model', type=file_check,
-                        default="games_0-50000-encoding_one-hot-point_rewards_True-Mon_Sep__4_23-48-24_2023",
+                        default="games_0--1-encoding_one-hot-point_rewards_True-card_put-pure_loss-Thu_Sep__7_22-41-35_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
-    parser.add_argument('--online_eval', type=bool, default=False,
+    parser.add_argument('--online_eval', type=bool, default=True,
                         help="Uses the pre-trained model to play online against itself."
                              " Rules out further training and evaluation of model.")
-    parser.add_argument('--play_as', type=int, default=0, choices=[0, 1, 2],
+    parser.add_argument('--play_as', type=int, default=None, choices=[0, 1, 2],
                         help='If you want to play against the AI, provide your position. Player 0 is starting.'
                              'Play with two pre-trained agents. Rules out training and evaluation of model.')
-    parser.add_argument('--amount_games_to_play', type=int, default=3600,
+    parser.add_argument('--amount_games_to_play', type=int, default=20000, #118,
                         help='The amount of games you want to play yourself. The deals are from a pseudo random shuffle'
                              'and independent of the data.')
+    parser.add_argument('--random_player', type=bool, default=True,
+                        help= "Whether to include a random player in online evaluation. "
+                              "The random player will sit in place of the human.")
 
     args = vars(parser.parse_args())
 
