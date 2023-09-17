@@ -1,13 +1,13 @@
-from game.game import Game
-from game.game_state_machine import GameStateMachine
-from game.game_variant import GameVariantGrand
-from game.state.game_state_bid import BidCallAction, BidAcceptAction, BidPassAction, PickUpSkatAction, \
+from dt_skat_environment.game_engine.game.game import Game
+from dt_skat_environment.game_engine.game.game_state_machine import GameStateMachine
+from dt_skat_environment.game_engine.game.game_variant import GameVariantGrand
+from dt_skat_environment.game_engine.game.state.game_state_bid import BidCallAction, BidAcceptAction, BidPassAction, PickUpSkatAction, \
     PutDownSkatAction, \
     DeclareGameVariantAction
-from game.state.game_state_play import PlayCardAction
-from game.state.game_state_start import GameStateStart, StartGameAction
-from model.card import Card
-from model.player import Player
+from dt_skat_environment.game_engine.game.state.game_state_play import PlayCardAction
+from dt_skat_environment.game_engine.game.state.game_state_start import GameStateStart, StartGameAction
+from dt_skat_environment.game_engine.model.card import Card
+from dt_skat_environment.game_engine.model.player import Player
 
 player1 = Player(1, "Alice")
 player2 = Player(2, "Bob")

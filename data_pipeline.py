@@ -7,15 +7,14 @@ from sklearn.model_selection import train_test_split
 
 from tqdm import tqdm
 
-from card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
-from environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
-from exceptions import InvalidPlayerMove
+from dt_skat_environment.card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
+from dt_skat_environment.environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
 
-from game.state.game_state_bid import PutDownSkatAction, BidCallAction, BidPassAction, \
+from dt_skat_environment.game_engine.game.state.game_state_bid import PutDownSkatAction, BidCallAction, BidPassAction, \
     PickUpSkatAction
-from game.state.game_state_play import PlayCardAction
+from dt_skat_environment.game_engine.game.state.game_state_play import PlayCardAction
 
-from model.player import Player
+from dt_skat_environment.game_engine.model.player import Player
 
 POSSIBLE_CHAMPIONSHIPS = ["wc", "bl", "gc", "gtc", "rc"]
 

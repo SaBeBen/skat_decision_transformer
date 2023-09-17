@@ -1,7 +1,7 @@
 from random import shuffle
 
-from game.game_state_machine import GameState, GameAction
-from game.state.game_state_bid import GameStateBid
+from dt_skat_environment.game_engine.game.game_state_machine import GameState, GameAction
+from dt_skat_environment.game_engine.game.state.game_state_bid import GameStateBid
 
 
 # ------------------------------------------------------------

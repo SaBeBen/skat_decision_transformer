@@ -1,4 +1,4 @@
-from game.game_state_machine import GameState, GameAction
+from dt_skat_environment.game_engine.game.game_state_machine import GameState, GameAction
 # from game.state.game_state_start import GameStateStart
 
 

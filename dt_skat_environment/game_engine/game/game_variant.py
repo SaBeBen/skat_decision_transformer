@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from model.card import Card
+from dt_skat_environment.game_engine.model.card import Card
 
 
 # ------------------------------------------------------------

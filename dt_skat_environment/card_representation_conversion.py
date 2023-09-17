@@ -1,4 +1,4 @@
-from model.card import Card
+from dt_skat_environment.game_engine.model.card import Card
 
 
 def convert_card_to_enc(card, encoding):

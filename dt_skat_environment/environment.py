@@ -3,19 +3,19 @@ from typing import List, Tuple, Callable
 import numpy as np
 import torch
 
-import exceptions
-from card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
+from dt_skat_environment.game_engine import exceptions
+from dt_skat_environment.card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
 
-from game.game import Game
-from game.game_state_machine import GameStateMachine
-from game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull, GameVariant
-from game.state.game_state_bid import BidCallAction, BidPassAction, PickUpSkatAction, DeclareGameVariantAction, \
+from dt_skat_environment.game_engine.game.game import Game
+from dt_skat_environment.game_engine.game.game_state_machine import GameStateMachine
+from dt_skat_environment.game_engine.game.game_variant import GameVariantSuit, GameVariantGrand, GameVariantNull, GameVariant
+from dt_skat_environment.game_engine.game.state.game_state_bid import BidCallAction, BidPassAction, PickUpSkatAction, DeclareGameVariantAction, \
     PutDownSkatAction
-from game.state.game_state_start import GameStateStart, StartGameAction
-from game.state.game_state_play import PlayCardAction, SurrenderAction
-from model.card import Card
+from dt_skat_environment.game_engine.game.state.game_state_start import GameStateStart, StartGameAction
+from dt_skat_environment.game_engine.game.state.game_state_play import PlayCardAction, SurrenderAction
+from dt_skat_environment.game_engine.model.card import Card
 
-from model.player import Player
+from dt_skat_environment.game_engine.model.player import Player
 
 # # card representation is a vector
 ACT_DIM = 12

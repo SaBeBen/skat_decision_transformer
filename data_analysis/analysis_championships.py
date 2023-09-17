@@ -216,9 +216,17 @@ game_variants = game_variants.drop(labels=["Null Ouvert", "Null Hand", "Null Ouv
 # %%
 # Create a bar plot showing the relative occurrence of game variants in all games
 colors = ["red", "green", "blue", "grey", "orange", "black", "purple"]
+
+plt.figure(figsize=(8, 7))
+plt.xticks(rotation=45)
+plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.15)
+
+game_variants = game_variants * 100
+
+# game_variants.plot.barh(x="Game", color=colors, autopct='%1.0f%%')
 game_variants.plot(kind="bar", y="Game", color=colors)
-plt.ylabel(f"Games of {championship} in %")
-plt.savefig(f"graphics/all_games_bar_{championship}.png")
+plt.ylabel(f"Games of {championship.upper()} in %")
+plt.savefig(f"graphics/all_games_bar_{championship}.svg", format='svg')
 plt.show()
 
 # %%
@@ -285,7 +293,7 @@ game_variants_sur_suit_stat = game_variants_sur_suit_stat.rename(
 
 game_variants_sur_suit_stat.plot(kind="bar", y="Won")
 plt.ylabel("Declarer in Surrendered Games", labelpad=10)
-plt.savefig(f"graphics/sur_suit_games_pie_{championship}.png")
+plt.savefig(f"graphics/sur_suit_games_pie_{championship}.svg", format='svg')
 plt.show()
 
 # %%
@@ -332,7 +340,7 @@ ax.set_xlabel('Additional level achieved')
 ax.set_ylabel('Occurrences in surrendered suit games in %')
 # ax.set_title('Additional level achieved in surrendered suit games')
 
-plt.savefig(f"graphics/sur_suit_level_games_bar_{championship}.png")
+plt.savefig(f"graphics/sur_suit_level_games_bar_{championship}.svg", format='svg')
 plt.show()
 
 # %%
@@ -377,6 +385,7 @@ game_variants_lost
 # direct comparison of lost and won games
 comp_won_lost = pd.DataFrame({"won": game_variants_won,
                               "lost": game_variants_lost})
+# plt.figure(figsize=(8, 7))
 comp_won_lost.plot.barh()
 plt.savefig(f"graphics/comp_won_lost_{championship}.png")
 plt.show()

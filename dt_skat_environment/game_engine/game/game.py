@@ -1,6 +1,6 @@
-from game.game_variant import GameVariantNull
-from model.card import Card
-from model.player import Player
+from dt_skat_environment.game_engine.game.game_variant import GameVariantNull
+from dt_skat_environment.game_engine.model.card import Card
+from dt_skat_environment.game_engine.model.player import Player
 
 
 class Game:

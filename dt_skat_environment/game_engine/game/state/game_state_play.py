@@ -1,8 +1,7 @@
-from exceptions import InvalidPlayerMove
-from game.game import Game
-from game.game_state_machine import GameState, PlayerAction, SurrenderAction
-from game.state.game_state_end import GameStateEnd
-from model.player import Player
+from dt_skat_environment.game_engine.exceptions import InvalidPlayerMove
+from dt_skat_environment.game_engine.game.game import Game
+from dt_skat_environment.game_engine.game.game_state_machine import GameState, PlayerAction, SurrenderAction
+from dt_skat_environment.game_engine.game.state.game_state_end import GameStateEnd
 
 
 # ------------------------------------------------------------

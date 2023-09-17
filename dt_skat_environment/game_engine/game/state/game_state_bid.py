@@ -1,9 +1,9 @@
-from exceptions import InvalidCardSize, InvalidPlayerMove
+from dt_skat_environment.game_engine.exceptions import InvalidCardSize, InvalidPlayerMove
 
-from game.game_state_machine import GameState, PlayerAction, SurrenderAction
-from game.state.game_state_play import GameStatePlay
-from model.card import Card
-from model.player import Player
+from dt_skat_environment.game_engine.game.game_state_machine import GameState, PlayerAction, SurrenderAction
+from dt_skat_environment.game_engine.game.state.game_state_play import GameStatePlay
+from dt_skat_environment.game_engine.model.card import Card
+from dt_skat_environment.game_engine.model.player import Player
 
 
 # ------------------------------------------------------------

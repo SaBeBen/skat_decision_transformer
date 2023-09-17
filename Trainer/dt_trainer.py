@@ -15,7 +15,7 @@ from transformers import DecisionTransformerModel, Trainer
 from transformers.trainer_utils import speed_metrics, IntervalStrategy
 from transformers.utils import ModelOutput
 
-from environment import ACT_DIM
+from dt_skat_environment.environment import ACT_DIM
 
 
 @dataclass

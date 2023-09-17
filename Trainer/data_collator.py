@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from environment import ACT_DIM, MAX_EPISODE_LENGTH
+from dt_skat_environment.environment import ACT_DIM, MAX_EPISODE_LENGTH
 
 
 @dataclass
