@@ -17,7 +17,7 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-from Trainer.data_collator import DecisionTransformerSkatDataCollator
+from trainer.data_collator import DecisionTransformerSkatDataCollator
 from datasets import Dataset, DatasetDict, load_from_disk
 from torch import nn
 from torch import Tensor
@@ -26,7 +26,7 @@ from sklearn.model_selection import train_test_split
 from transformers import TrainingArguments, DecisionTransformerConfig
 
 import data_pipeline
-from Trainer.dt_trainer import TrainableDT, DTTrainer
+from trainer.dt_trainer import TrainableDT, DTTrainer
 from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
 
 
@@ -80,6 +80,7 @@ def run_training(args):
     load_dataset = games_to_load.stop == -1 or games_to_load.stop - games_to_load.start >= 10000
 
     if load_dataset:
+        print("\nLoading dataset from existing sources...")
         dataset = load_from_disk(f"./datasets/wc-without_surr_and_passed-pr_{point_rewards}-{hand_encoding}-card_put")
         amount_games = (games_to_load.stop - games_to_load.start) * 3  # * 3 for every perspective
         dataset['train'] = Dataset.from_dict(dataset['train'][:math.floor(amount_games * 0.8)])
@@ -124,6 +125,7 @@ def run_training(args):
     )
 
     if pretrained_model_path is not None:
+        print(f"\nTrying to load pre-trained model from {pretrained_model_path}...\n")
         pretrained_model = TrainableDT.from_pretrained(pretrained_model_path)
         model = pretrained_model
 
@@ -175,20 +177,15 @@ def run_training(args):
         data_collator=collator,
     )
 
-    print(f"\nTraining on games {games_to_load.start, games_to_load.stop} with {hand_encoding} encoding...")
+    print(f"\nTraining on games {games_to_load.start, games_to_load.stop} "
+          f"with {hand_encoding}"
+          f" encoding on {championship}...")
     trainer.train()
 
     if save_model:
         model.save_pretrained(rf"./pretrained_models/{dir_name}")
 
-    # training_args.do_eval, training_args.evaluation_strategy, training_args.eval_steps = True, "steps", 50
-    #
-    # trainer.data_collator = DecisionTransformerSkatDataCollator(dataset["test"])
-    #
-    # evaluation_results = trainer.evaluate()
-    #
-    # print(evaluation_results)
-
+    # manual evaluation. Disabled, as there it has limited use. Good for debugging
     # if not load_dataset:
     #     evaluate_in_env(model, point_rewards, state_dim,
     #                     card_enc=hand_encoding,
@@ -1093,13 +1090,10 @@ def file_check(rel_path: str):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog='Skat_Decision_Transformer_trainer',
-                                     description='Trains a Decision Transformer on a championship dataset using '
-                                                 'Huggingface´s Decision Transformer.'
-                                                 'A GPT2 model uses causal self-attention for training.'
-                                                 'After training it autoregressively predicts the next action.',
+    parser = argparse.ArgumentParser(prog='experiments',
+                                     description='Train a DT, play against one or let a random player play.',
                                      epilog='For more information, we refer to the underlying paper '
-                                            '"Decision Transformer: Reinforcement Learning via Sequence Modeling" and'
+                                            '"Decision Transformer: Reinforcement Learning via Sequence Modeling" and '
                                             'their implementation '
                                             'https://github.com/kzl/decision-transformer/tree/master, as well as'
                                             ' Huggingface')
@@ -1109,13 +1103,13 @@ if __name__ == '__main__':
                              ' corrupted.')
     parser.add_argument('--games', type=int, default=(0, 10), nargs="+",
                         help='The games to load. Note that if this value surpasses 10 000, the game ids are ignored '
-                             'and the games are randomly loaded from a dataset.')
+                             'and the games are randomly loaded from a dataset (with a seed for reproducability).')
     parser.add_argument('--perspective', type=int, default=(0, 1, 2), nargs="+",
                         help='Get the game from the amount of perspectives.'
                              'Note that the dataset will be split into test and train,',
                         choices=[(0, 1, 2), (0, 1), 0])  # choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])
     parser.add_argument('--point_rewards', type=bool, default=True,
-                        help='whether to add points of the game to the card points as a reward')
+                        help='Whether to use discounted Seeger-Fabian score as rewards')
     parser.add_argument('--hand_encoding', '-enc', type=str, default='one-hot',
                         choices=['mixed', 'mixed_comp', 'one-hot', 'one-hot_comp'],
                         help='The encoding of cards in the state.')
@@ -1139,7 +1133,7 @@ if __name__ == '__main__':
                         help="Whether to evaluate during training. Slows down training if activated."
                              "Evaluation takes place on the test portion of the dataset (#_games_to_load * 0.2).")
     parser.add_argument('--pretrained_model', type=file_check,
-                        # default="games_0--1-encoding_one-hot-point_rewards_True-card_put-pure_loss-Thu_Sep__7_22-41-35_2023",
+                        # default="games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
     parser.add_argument('--online_eval', type=bool, default=False,

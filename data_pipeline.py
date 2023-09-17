@@ -706,8 +706,10 @@ def get_states_actions_rewards(
 
 
 if __name__ == '__main__':
-
-    # set_memory_limit(64)
+    # this is a bit messy, as some championship logs are corrupt and produce errors while replaying
+    # the wc is only flawed when loading surrendered games, as the logging is not consistent
+    # in the position of surrender
+    # Furthermore, there are experiments to faster load starting configurations for the self-play
 
     # possible_cs = ["gc", "gtc", "rc"]  # "bl", "gc",
 
@@ -731,7 +733,6 @@ if __name__ == '__main__':
                     0, -1),
                 point_rewards=point_rewards,
                 card_enc=enc)
-
 
             data_df = pd.DataFrame(data)
             # first_states_df = np.repeat(first_states, 3, axis=0)

@@ -22,14 +22,14 @@ def tensorboard_logs_to_df(log_dir, mode=None):
     tags = tags[:13]
 
     if mode is None:
-        mode = log_dir.split("encoding_")[1].split("-wo_mask")[0].capitalize().replace("_", " ").replace("comp", "comp.")
+        # mode = log_dir.split("encoding_")[1].split("-wo_mask")[0].capitalize().replace("_", " ").replace("comp", "comp.")
         mode = log_dir.split("one-hot-")[1].split("-240")[0].capitalize().replace("_", " ").replace("comp", "comp.")
 
 
     for tag in tags:
         events = event_acc.Scalars(tag)
         data.append({
-            'Mask': mode,
+            'Encoding': mode,
             'tag': tag,
             'step': [int(event.step) for event in events],
             'value': [float(event.value) for event in events]
@@ -70,7 +70,7 @@ def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
             data=df_tag,
             x='step',
             y='value',
-            hue='Mask'
+            hue='Encoding'
         )
 
         plt.xlabel('Step')
@@ -86,6 +86,8 @@ def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
         plt.ylabel(ylabel)
 
         # Adjust the step size
+        # new_xticks = np.arange(0, 180001, 60000)
+        # plt.xticks(new_xticks)
         new_xticks = np.arange(0, 400000, 120000)
         plt.xticks(new_xticks)
         # new_xticks = np.arange(0, 1200001, 400000)
@@ -108,7 +110,7 @@ if __name__ == '__main__':
 
     # possible existing run ids
     run_ids = [
-        # "games_0--1-encoding_one-hot-point_rewards_True-card_put-pure_loss-Thu_Sep__7_22-41-35_2023"
+        # "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
         # "games_0-10000-encoding_one-hot-wo_mask-card_put-Mon_Sep_11_23-59-52_2023",
         # "games_0-10000-encoding_mixed-wo_mask-card_put-Mon_Sep_11_23-57-37_2023",
         # "games_0-10000-encoding_one-hot_comp-wo_mask-Wed_Sep_13_00-21-03_2023",
@@ -124,9 +126,8 @@ if __name__ == '__main__':
         "eval/prob_correct_action",
         # "train/rate_oob_actions",
         # "train/rate_wrong_action_taken",
-        # "eval/prob_correct_action",
         # "eval/rate_wrong_action_taken",
-        # "eval/loss"
+        "eval/loss"
         # "eval/loss: "     # in older, non sanitized logs
     ]
     parser.add_argument(
@@ -144,7 +145,7 @@ if __name__ == '__main__':
     current_time = time.asctime().replace(':', '-').replace(' ', '_')
     parser.add_argument(
         "--plot_name", type=str, default="comp_mask",  # f"{current_time}",
-        choices=["all_wc_games", "comp_enc", "comp_mask"],
+        choices=["all_wc_games", "comp_enc", "enc_comp"],
         help="Name of plot.",
     )
 
