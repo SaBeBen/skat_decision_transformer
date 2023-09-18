@@ -29,7 +29,7 @@ def tensorboard_logs_to_df(log_dir, mode=None):
     for tag in tags:
         events = event_acc.Scalars(tag)
         data.append({
-            'Encoding': mode,
+            'Mask': mode,
             'tag': tag,
             'step': [int(event.step) for event in events],
             'value': [float(event.value) for event in events]
@@ -70,7 +70,7 @@ def plot_tb(run_ids, tags, name, output_dir=None, convert_tb_to_csv=False):
             data=df_tag,
             x='step',
             y='value',
-            hue='Encoding'
+            hue='Mask'
         )
 
         plt.xlabel('Step')

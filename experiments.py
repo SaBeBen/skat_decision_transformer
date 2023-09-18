@@ -78,6 +78,7 @@ def run_training(args):
         max_context_length = 1024
 
     load_dataset = games_to_load.stop == -1 or games_to_load.stop - games_to_load.start >= 10000
+    load_dataset = False    # as the datasets are not included due to their size
 
     if load_dataset:
         print("\nLoading dataset from existing sources...")

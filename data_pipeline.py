@@ -711,19 +711,17 @@ if __name__ == '__main__':
     # in the position of surrender
     # Furthermore, there are experiments to faster load starting configurations for the self-play
 
-    # possible_cs = ["gc", "gtc", "rc"]  # "bl", "gc",
+    # possible_cs = ["gc", "gtc", "rc", "bl", "gc"]
 
     championship = "wc"
 
-    card_encodings = ["one-hot"]  # , "mixed_comp", "one-hot_comp", "mixed"]
-    # for championship in POSSIBLE_CHAMPIONSHIPS:
-    # point_rewards = True
+    card_encodings = ["one-hot", "mixed_comp", "one-hot_comp", "mixed"]
+
     print(f"Reading in championship {championship}...")
 
     for point_rewards in [True]:
         for enc in card_encodings:
             print(f"...with {enc} encoding...")
-            # card_dim, max_hand_len, state_dim = get_dims_in_enc(enc)
 
             data, _, first_states, meta_and_cards, actions_table, skat_and_cs = get_states_actions_rewards(
                 championship,
@@ -735,7 +733,7 @@ if __name__ == '__main__':
                 card_enc=enc)
 
             data_df = pd.DataFrame(data)
-            # first_states_df = np.repeat(first_states, 3, axis=0)
+
             first_states_df = pd.DataFrame(first_states)
             # to match the input of the games from every perspective
             meta_and_cards = np.repeat(meta_and_cards, 3, axis=0)
@@ -746,8 +744,6 @@ if __name__ == '__main__':
             # only for a shallow analysis and debugging
             data_train, data_test, _, first_states_test, _, meta_and_cards_test = train_test_split(
                 data_df, first_states_df, meta_and_cards_df, train_size=0.8, random_state=42)
-
-            # data_train, data_test = train_test_split(data_frame, train_size=0.8, random_state=42)
 
             dataset = DatasetDict({"train": Dataset.from_dict(data_train),
                                    "test": Dataset.from_dict(data_test),

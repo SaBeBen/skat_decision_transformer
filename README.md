@@ -32,3 +32,5 @@ To let it play against itself with German championship starting configurations:
 ````shell
 python experiments.py --online_eval True --amount_games_to_play 2000 --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
 ````
+Note that due to the increased size of datasets, only the raw data tables and not the datasets are included in this version. 
+The data_pipeline can however read in these datasets (takes up to several hours).
