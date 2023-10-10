@@ -1,36 +1,178 @@
 # Skat Decision Transformer
 
 This is the implementation developed during my Bachelor thesis.
-The project aims to explore the capabilities of [Decision Transformers](https://github.com/kzl/decision-transformer/tree/master) (DTs)
+The project aims to explore the capabilities
+of [Decision Transformers](https://github.com/kzl/decision-transformer/tree/master) (DTs)
 in application to card game Skat.
 
-It trains a DT on expert data and evaluates the trained model. For that, a data pipeline converts the 
-information of the games into states, actions and returns. Then, a data collator applies batching, masking and produces 
-the returns-to-go. The states, actions and returns-to-go are fed into a huggingface DT which is modified to log Skat 
-relevant metrices and predictions.
+It trains a DT on expert data and evaluates the trained model. For that, a data pipeline converts the
+information of the games into states, actions and returns. Then, a data collator applies batching, masking and produces
+the returns-to-go. The states, actions and returns-to-go are fed into a Huggingface (HF) DT which is modified to log
+Skat relevant metrics and predictions.
 Further, you can evaluate pre-trained model on random plays or against yourself.
 Note that playing is prioritized over evaluation over training. You cannot do all or two of them at once.
 
 The training can be reproduced with the following command:
+
 ````shell
 python experiments.py --championship "wc" --games 0 10000
 ````
+
 For more information about the options:
+
 ````shell
 python experiments.py --help 
 ````
-For playing against a pre-trained model, provide your starting position. It will rotate with each round. 
-For example, to start in fore-hand, play 36 games against the model trained on all non-surrendered suit WC games:
+
+For playing against a pre-trained model, provide your starting position. It will rotate with each round.
+For example, to start in forehand, play 36 games against the model trained on all non-surrendered suit WC games:
+
 ````shell
-python experiments.py --play_as 0 --amount_games_to_play 36 --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
+python experiments.py --play_as 0 --amount_games_to_play 36 --pre-trained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
 ````
+
 To let the AI play against a random actor:
+
 ````shell
-python experiments.py --play_as 0 --amount_games_to_play 2000 --random_player True --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
+python experiments.py --play_as 0 --amount_games_to_play 2000 --random_player True --pre-trained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
 ````
+
 To let it play against itself with German championship starting configurations:
+
 ````shell
-python experiments.py --online_eval True --amount_games_to_play 2000 --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
+python experiments.py --online_eval True --amount_games_to_play 2000 --pre-trained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
 ````
-Note that due to the increased size of datasets, only the raw data tables and not the datasets are included in this version. 
-The data_pipeline can however read in these datasets (takes up to several hours).
+
+Note that due to the increased size of datasets, only the raw data tables and not the datasets are included in this
+version.
+However, the data_pipeline can read in these data (takes up to several hours) and save them into a dataset directory:
+
+````shell
+python data_pipeline.py
+````
+
+# Project Structure
+
+We modularize our project into a data pipeline, a Skat environment, a trainer and experiments. The Skat environment is
+based on the existing skat_buddy implementation. Our trainer employs the HF DT implementation.
+The card representation can be set with the option "--hand_encoding" when calling [experiments.py](experiments.py).
+However, the pretrained model relies on the one-hot encoding and cannot be used with another.
+If you want to change the state representation, you have to change the dimensions in the function "get_dims_in_enc" in
+the [environment](dt_skat_environment/environment.py), [data_pipeline.py](data_pipeline.py) and the offset in the
+creation of the masks in the [trainer](trainer/dt_trainer.py).
+
+## Data Pipeline
+
+We have to extract the representation of the game from the raw data and represent it in states, actions and rewards. 
+Multiple card representations are possible. The state and its dimension changes when providing different representations
+as an argument in [experiments.py](experiments.py). 
+There are four different card encodings (with their argument to use them via "experiment.py --hand_encoding"): 
+- one-hot (one-hot)
+- mixed (mixed)
+- compressed one-hot (one-hot_comp)
+- compressed mixed (mixed_comp)
+
+Only the one-hot encoding is possible when masking, as masking has to be specific for an encoding. We choose the one-hot 
+encoding to mask.
+Without masking in training, the others can be used as well. One has to change the 
+
+The data directory includes the raw data in csv format. The format of the data is explained in another README in
+skat_decision_transformer/data.
+
+The directory [data_analysis](data_analysis) contains scripts analyzing
+a [certain championship](data_analysis/analysis_championships.py)
+or [all championships](data_analysis/statistics_all_championships.py).
+Both create plots saved in the directory data_analysis/graphics.
+
+The directory datasets contains datasets with a test/train split generated by data_pipeline.py in arrow format for
+training. To guarantee reproducibility, we use a seed for the random generation.
+The existing datasets are loaded when at least 10000 games should be included in training.
+
+[data_pipeline.py](data_pipeline.py) loads the raw data from the csv files, replays the games from the data on Skat
+environment to validate the card playing actions and generates the state, action and reward representations.
+It can also load the first states and meta and card data. This is only relevant to possibly load games more efficiently
+for evaluation. However, we do not save the first states and meta and card information, because the several thousand
+games for the online evaluation can be read in within a few minutes.
+
+A data collator prepares the data during training and is called by a data loader. This
+is more efficient than converting all games, as it only loads the ones used in training.
+
+A script as [data_pipeline.py](data_pipeline.py) does not exist in the linked HF implementation, as the data already is
+prepared for the data collator. We need the script for the game extraction from the raw data.
+
+## Skat Environment
+
+Our Skat environment dt_skat_environment the necessary conversion of card representation and game engine. The game
+engine enables playing Skat and throws [exceptions](dt_skat_environment/game_engine/exceptions.py) when players attempt
+illegal moves. It also checks for the correct order of [game states](dt_skat_environment/game_engine/game/state) being
+start, bid, play and end.
+
+## Trainer
+
+Our trainer defines a data collator and adapts
+the [Decision Transformer from HF](https://huggingface.co/docs/transformers/main/model_doc/decision_transformer) to our
+Skat environment.
+We only adapt the collator partially, because
+their [example use case](https://huggingface.co/blog/train-decision-transformers) of a Gym Cheetah differs from ours.
+Theirs is a continuous environment, ours a discrete.
+Furthermore, we limit the maximum episode length to 12 timesteps of states, actions and rewards per game, their
+continuous and cyclic movement allows splitting the movement into more timesteps.
+
+The trainer logs to [training-logs](training-logs) and saves training checkpoints to [training_output](training_output).
+Furthermore, there is an option to save a model as a pre-trained model in [pre-trained_models](pretrained_models).
+
+Plots can be generated by a [plotting_script](plots/plotting_script.py) from selected
+[Tensorboard logs](plots/tensorboard_graphs).
+
+## Experiments
+
+experiments.py defines the experiments. With the help of an argument parser, we can run the following procedures
+(with their functions the main function calls):
+
+- Training (run_training)
+- (deactivated) manual evaluation (evaluate_in_env)
+- Playing against
+    - Itself (run_online_eval)
+    - A random player (play_with_two)
+    - It as a human (play_with_two)
+
+# Workflow of Experiments
+
+The workflow depends on the choice of the experiment listed below.
+The functions to call are in brackets.
+
+### Training (run_training)
+
+1. Load dataset either from existing sources or new. Random seed enables reproducibility
+2. Use HF train framework:
+    1. Initialize data collator
+    2. Initialize DT config
+    3. Initialize model or load pre-trained model if given
+    4. Initialize training arguments
+    5. Set evaluation parameters
+    6. Train model
+    7. (optionally) save model (is not saved by default)
+
+The HF trainer is part of our custom DT trainer. We alter the forward function to apply a mask for valid actions
+specifically for the one-hot encoding. Further, we manipulate the logging in the forward, evaluate and training_step
+methods to log own metrics, such as the probability of correct actions.
+
+### Playing against itself (run_online_eval)
+
+1. Read in arguments from parser calls
+2. Load dimensions
+3. Load pre-trained model
+4. Play against itself (eval_three_agents)
+
+### Playing against a random player and against a human (play_with_two)
+
+1. Read in arguments from parser calls
+2. Load dimensions
+3. Load pre-trained model
+4. Play with two agents based on the pre-trained model (play_with_two_agents)
+    - Differs between a random player and human player through if-conditions while playing
+
+### Manual implementation (evaluate_in_env) (deactivated, kept for debugging usage)
+
+- Plays Skat in background. Thus, less efficient than integrated testing in training,
+- Can be employed for debugging

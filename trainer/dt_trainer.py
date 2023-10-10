@@ -1,4 +1,3 @@
-
 import math
 import time
 from dataclasses import dataclass
@@ -15,7 +14,7 @@ from transformers import DecisionTransformerModel, Trainer
 from transformers.trainer_utils import speed_metrics, IntervalStrategy
 from transformers.utils import ModelOutput
 
-from dt_skat_environment.environment import ACT_DIM
+from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc
 
 
 @dataclass
@@ -58,8 +57,9 @@ class CustomDecisionTransformerOutput(ModelOutput):
 
 
 class TrainableDT(DecisionTransformerModel):
-    def __init__(self, config):
+    def __init__(self, config, use_mask):
         super().__init__(config)
+        self.use_mask = use_mask
 
     def original_forward(
             self,
@@ -72,6 +72,7 @@ class TrainableDT(DecisionTransformerModel):
             output_hidden_states=None,
             output_attentions=None,
             return_dict=None,
+            # use_mask=True
     ) -> Union[Tuple, CustomDecisionTransformerOutput]:
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -133,18 +134,12 @@ class TrainableDT(DecisionTransformerModel):
         state_preds = self.predict_state(x[:, 2])  # predict next state given state and action
         action_preds = self.predict_action(x[:, 1])  # predict next action given state
 
-        # put_card_mask = states[:, :, 3].bool()
-        # action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
-
-        # sm = torch.nn.Softmax(dim=2)
-        # action_preds = sm(action_preds)
-
-        # action_targets_masked = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        # action_preds_masked = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
-        #
-        # nll_loss_fct = torch.nn.NLLLoss()
-        # loss_pure = nll_loss_fct(torch.log(action_preds_masked), torch.argmax(action_targets_masked, dim=1))
-        # loss = loss_pure
+        # mask all actions were no card can be played, 1 if it can be played, 0 if not
+        # e.g. in Hand games, as defenders in first two tricks (or side effect: due to the attention_mask)
+        put_card_mask_zeros = states[:, :, 3].bool().to(self.device)
+        # fp16 compatibility
+        put_card_mask_zeros = put_card_mask_zeros.unsqueeze(2).repeat(1, 1, 12).to(dtype=self.dtype)
+        put_card_mask = (1.0 - put_card_mask_zeros) * torch.finfo(self.dtype).min
 
         # In the following, limiting behaviour is injected to set the rules of Skat.
         # This can be seen as a safety mechanism.
@@ -152,125 +147,99 @@ class TrainableDT(DecisionTransformerModel):
         # The rules are included by looking at first open card, played cards and colour (including trump_enc),
         # and the possible hand length (prevent out-of-bounds actions)
 
-        # Reminder: We use a one-hot encoding with the resulting game state
-        # game_state = position co-player (3)  + score (2) + trump (4) + last trick (36)
-        # + open cards (24) + hand cards (12 * 12)
+        if self.use_mask:
+            # when wanting to train with a mask of legal cards
+            # (in bounds is guaranteed by put_card_mask)
 
-        # A lot of indices and masks are used for parallel processing,
-        # to translate it into simpler terms, it does the following:
-        # If (open suit is on hand) or (trump is played and are jacks on hand)?
-        # If yes -> valid actions are all cards with same suit or jacks when trump is lying
-        # If not -> valid actions are all cards on the hand (called "in bounds")
-        #
-        # if states.shape[0] == batch_size:
-        trump_enc = states[:, :, 6:10]
+            # Reminder: We use a one-hot encoding with the resulting game state
+            # game_state = position co-player (3)  + score (2) + trump (4) + last trick (36)
+            # + open cards (24) + hand cards (12 * 12)
 
-        open_cards = states[:, :, 46:70]
-        colour_trick = open_cards[:, :, :4]
-        # jack_lying = open_cards[:, :, 11]
+            # A lot of indices and masks are used for parallel processing,
+            # to translate it into simpler terms, it does the following:
+            # If (open suit is on hand) or (trump is played and are jacks on hand)?
+            # If yes -> valid actions are all cards with same suit or jacks when trump is lying
+            # If not -> valid actions are all cards on the hand (called "in bounds")
+            #
+            # if states.shape[0] == batch_size:
+            trump_enc = states[:, :, 6:10]
 
-        # If jack is first card, the trump_enc matters, not the suit of the jack
-        jack_played_as_first = open_cards[:, :, 11].reshape(batch_size, 12, 1).bool().to(self.device)
+            open_cards = states[:, :, 46:70]
+            colour_trick = open_cards[:, :, :4]
+            # jack_lying = open_cards[:, :, 11]
 
-        # If jack is played at first, trump suit is the one of trick, else the suit of the first card
-        # (batch, trick, colour)
-        colour_trick = jack_played_as_first * trump_enc + ~jack_played_as_first * colour_trick
+            # If jack is first card, the trump_enc matters, not the suit of the jack
+            jack_played_as_first = open_cards[:, :, 11].reshape(batch_size, 12, 1).bool().to(self.device)
 
-        # If colour does not exist on hand, it is padded with 0s
-        # -> we can find out if suit is on hand by looking in state at fixed indices
-        hand_cards = states[:, :, -144:].reshape(batch_size, 12, 12, 12).to(self.device)
-        # (batch, trick, hand in trick, cards) -> each card is reduced to its suit/colour
-        colours_on_hands = hand_cards[:, :, :, :4]
+            # If jack is played at first, trump suit is the one of trick, else the suit of the first card
+            # (batch, trick, colour)
+            colour_trick = jack_played_as_first * trump_enc + ~jack_played_as_first * colour_trick
 
-        # How can we find out if suit of the trick is on the hand?
-        # -> create a mask for each card suit at trick t
-        # the hand (sequence of colours can have a variable length)
-        # the 12 repeated entries are a mask over the cards in each trick
-        # (batch, trick, suit) -> (batch, trick, suit_in_trick * 12, suit)
-        trick_mask = colour_trick.unsqueeze(2).repeat(1, 1, 12, 1).to(self.device)
+            # If colour does not exist on hand, it is padded with 0s
+            # -> we can find out if suit is on hand by looking in state at fixed indices
+            hand_cards = states[:, :, -144:].reshape(batch_size, 12, 12, 12).to(self.device)
+            # (batch, trick, hand in trick, cards) -> each card is reduced to its suit/colour
+            colours_on_hands = hand_cards[:, :, :, :4]
 
-        # Finally, find out if suit is on hand...
-        is_colour_on_hand = trick_mask * colours_on_hands
+            # How can we find out if suit of the trick is on the hand?
+            # -> create a mask for each card suit at trick t
+            # the hand (sequence of colours can have a variable length)
+            # the 12 repeated entries are a mask over the cards in each trick
+            # (batch, trick, suit) -> (batch, trick, suit_in_trick * 12, suit)
+            trick_mask = colour_trick.unsqueeze(2).repeat(1, 1, 12, 1).to(self.device)
 
-        # ...and if trump is played, a jack:
-        jack_on_hand = hand_cards[:, :, :, 11].bool()
-        trump_played = torch.any(colour_trick * trump_enc, dim=2).to(self.device)  # + jack_lying
-        jack_playable = jack_on_hand * trump_played.reshape(batch_size, 12, 1).to(self.device)
+            # Finally, find out if suit is on hand...
+            is_colour_on_hand = trick_mask * colours_on_hands
 
-        # Creates a mask: Does the lying suit exist on the hand?
-        # If no colour is laying, mask is merged with actions in bounds
-        is_colour_on_hand = torch.any(is_colour_on_hand, dim=3).to(self.device)
+            # ...and if trump is played, a jack:
+            jack_on_hand = hand_cards[:, :, :, 11].bool()
+            trump_played = torch.any(colour_trick * trump_enc, dim=2).to(self.device)  # + jack_lying
+            jack_playable = jack_on_hand * trump_played.reshape(batch_size, 12, 1).to(self.device)
 
-        # Jacks also have a suit which can be falsely recognised by is_colour_on_hand
-        # -> get Jacks out of is_colour_on_hand:
-        is_colour_on_hand = is_colour_on_hand * (~jack_on_hand)
+            # Creates a mask: Does the lying suit exist on the hand?
+            # If no colour is laying, mask is merged with actions in bounds
+            is_colour_on_hand = torch.any(is_colour_on_hand, dim=3).to(self.device)
 
-        # Playable cards to add to the trick, not to start it
-        playable_cards_to_add = is_colour_on_hand + jack_playable.bool()
+            # Jacks also have a suit which can be falsely recognised by is_colour_on_hand
+            # -> get Jacks out of is_colour_on_hand:
+            is_colour_on_hand = is_colour_on_hand * (~jack_on_hand)
 
-        # If colour is not on hand: mask is all cards excluding actions not on hand (OOB)
-        hand_card_length = torch.sub(12, timesteps).to(self.device)
+            # Playable cards to add to the trick, not to start it
+            playable_cards_to_add = is_colour_on_hand + jack_playable.bool()
 
-        # Mask is all cards excluding OOB actions
-        actions_in_bounds = torch.arange(12).repeat(batch_size, 12).reshape(batch_size, 12, 12).to(
-            self.device) < hand_card_length.view(-1, 12, 1).to(self.device)
+            # If colour is not on hand: mask is all cards excluding actions not on hand (OOB)
+            hand_card_length = torch.sub(12, timesteps).to(self.device)
 
-        merging_mask = (~playable_cards_to_add).all(dim=2).to(self.device)
+            # Mask is all cards excluding OOB actions
+            actions_in_bounds = torch.arange(12).repeat(batch_size, 12).reshape(batch_size, 12, 12).to(
+                self.device) < hand_card_length.view(-1, 12, 1).to(self.device)
 
-        # If no card is lying, action_in_bounds is valid
-        # If at least one card is lying, playable_cards_to_add acknowledges the suit
-        playable_cards = playable_cards_to_add.clone().to(self.device)
-        playable_cards[merging_mask] = actions_in_bounds[merging_mask]
+            merging_mask = (~playable_cards_to_add).all(dim=2).to(self.device)
 
-        # From modeling_decision_transformer.py (HF):
-        # Since playable_cards is 1.0 for positions we want to attend and 0.0 for
-        # masked positions, this operation will create a tensor which is 0.0 for
-        # positions we want to attend and the dtype's smallest value for masked positions.
-        # Since we are adding it to the raw scores before the softmax, this is
-        # effectively the same as removing these entirely.
-        playable_cards = playable_cards.to(dtype=self.dtype)  # fp16 compatibility
-        playable_cards = (1.0 - playable_cards) * torch.finfo(self.dtype).min
+            # If no card is lying, action_in_bounds is valid
+            # If at least one card is lying, playable_cards_to_add acknowledges the suit
+            playable_cards = playable_cards_to_add.clone().to(self.device)
+            playable_cards[merging_mask] = actions_in_bounds[merging_mask]
 
-        possible_action_preds = playable_cards + action_preds
+            # From modeling_decision_transformer.py (HF):
+            # Since playable_cards is 1.0 for positions we want to attend and 0.0 for
+            # masked positions, this operation will create a tensor which is 0.0 for
+            # positions we want to attend and the dtype's smallest value for masked positions.
+            # Since we are adding it to the raw scores before the softmax, this is
+            # effectively the same as removing these entirely.
+            playable_cards = playable_cards.to(dtype=self.dtype)  # fp16 compatibility
+            playable_cards = (1.0 - playable_cards) * torch.finfo(self.dtype).min
 
-        # mask all actions were no card can be played, 1 if it can be played, 0 if not
-        # e.g. in Hand games, as defenders in first two tricks (or side effect: due to the attention_mask)
-        put_card_mask_zeros = states[:, :, 3].bool().to(self.device)
+            possible_action_preds = playable_cards + action_preds
 
-        # # starting from here until the loss fct, the loss is calculated
+            action_preds = possible_action_preds + put_card_mask
 
-        # softmax has to be before the cross entropy loss
-
-        # action_targets_masked = actions * put_card_mask.unsqueeze(2).repeat(1, 1, 12) * playable_cards
-
-        put_card_mask_zeros = put_card_mask_zeros.unsqueeze(2).repeat(1, 1, 12).to(dtype=self.dtype)  # fp16 compatibility
-        put_card_mask = (1.0 - put_card_mask_zeros) * torch.finfo(self.dtype).min
-
-        # TODO: comment when wanting to train without a mask
-        action_preds = possible_action_preds + put_card_mask
-
-        # apply mask whether a card should be played based on game timestep
-        # action_preds = possible_action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
-
-        # equal to target mask
-        # mask_wo_zeros = action_preds.sum(dim=1)
-        # mask_wo_zeros = mask_wo_zeros > 0
-
-
-
+        # softmax has to be calculated before the cross entropy loss
         sm = torch.nn.Softmax(dim=2)
         action_preds_output = sm(action_preds)
 
         # more stable than sm + log
         action_preds_ls = torch.nn.functional.log_softmax(action_preds, dim=2)
-
-        # produces NaNs
-        # action_preds = action_preds * put_card_mask.unsqueeze(2).repeat(1, 1, 12)
-        # produces NaNs
-        # action_mask = action_preds != 0
-        # comb_mask = action_mask * attention_mask.unsqueeze(2).repeat(1, 1, 12).bool()
-        # temp = action_preds[comb_mask]
-        # temp2 = actions[comb_mask]
 
         action_targets_masked = actions.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
         action_preds_masked = action_preds_ls.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
@@ -486,4 +455,3 @@ class DTTrainer(Trainer):
             self.log(metrics)
 
         return loss.detach() / self.args.gradient_accumulation_steps
-

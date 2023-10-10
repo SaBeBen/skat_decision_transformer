@@ -30,6 +30,7 @@ from trainer.dt_trainer import TrainableDT, DTTrainer
 from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
 
 
+# set address space limit on unix systems to prevent uncontrolled, excessive memory usage
 # def set_memory_limit(limit_gb):
 #     limit_bytes = limit_gb * 1024 * 1024 * 1024  # Convert MB to bytes
 #     resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
@@ -135,7 +136,8 @@ def run_training(args):
                              "This is caused by altering the state representation.\n"
                              "Please choose the newest model.")
     else:
-        model = TrainableDT(config)
+        use_mask = hand_encoding == "one-hot"
+        model = TrainableDT(config, use_mask=use_mask)
 
     model = model.to(device)
 
@@ -427,8 +429,6 @@ def run_online_eval(args):
         perspective=perspective,
         card_enc=hand_encoding)
 
-    # first_state = data.iloc[0, 0][0]
-
     pretrained_model.config.state_dim = state_dim
 
     print(f"\nEvaluating AI against itself on games {games_to_load.start, games_to_load.stop}...\n")
@@ -464,7 +464,7 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, game_idx,
     # scale is employed as follows: current_return = target_return - latest_reward / scale
     # should take a value
 
-    # initialise s, a, r, t and raw action logits for every player
+    # initialize s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
 
     # The list points for the three agents
@@ -538,10 +538,7 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, game_idx,
             actions_pred_eval = torch.cat([actions_pred_eval, torch.zeros((3, 1, ACT_DIM))], dim=1)
             rewards = torch.cat([rewards, torch.zeros(3, 1)], dim=1)
 
-            cur_state = torch.zeros(0, state_dim).float()
-
             cur_state = np.array([[0] * state_dim] * 3)
-            cur_pred_return = torch.zeros(0, 1).float()
 
             for i in range(3):
                 # use the first playing order as an order of playing when putting the Skat
@@ -733,7 +730,6 @@ def play_with_two_agents(model,
     :param state_dim: The state dimension.
     :param amount_games: Amount games to play.
     :param human_player_start: Starting position of human 0 for fore-hand, 1 for mid-hand, 2 for rear-hand
-    :param first_game_states:
     :param random_activated: Whether to take over the human position and choose random legal cards in game.
     :return: Dataframe with statistics about the played games.
     """
@@ -751,7 +747,7 @@ def play_with_two_agents(model,
     declarer_points_human, defender_points_human, declarer_wins_human, defender_wins_human = 0, 0, 0, 0
     declarer_games_human, defender_games_human = 0, 0
 
-    # initialise s, a, r, t and raw action logits for every player
+    # initialize s, a, r, t and raw action logits for every player
     states, actions, rewards, timesteps, actions_pred_eval = [[] * 3], [[] * 3], [[] * 3], [[] * 3], [[] * 3]
 
     # The list points for the human player and the two agents

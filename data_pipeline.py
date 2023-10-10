@@ -715,6 +715,8 @@ if __name__ == '__main__':
 
     championship = "wc"
 
+    read_in_for_eval = False
+
     card_encodings = ["one-hot", "mixed_comp", "one-hot_comp", "mixed"]
 
     print(f"Reading in championship {championship}...")
@@ -734,21 +736,29 @@ if __name__ == '__main__':
 
             data_df = pd.DataFrame(data)
 
-            first_states_df = pd.DataFrame(first_states)
-            # to match the input of the games from every perspective
-            meta_and_cards = np.repeat(meta_and_cards, 3, axis=0)
-            meta_and_cards_df = pd.DataFrame(meta_and_cards)
+            if read_in_for_eval:
+                first_states_df = pd.DataFrame(first_states)
+                # to match the input of the games from every perspective
+                meta_and_cards = np.repeat(meta_and_cards, 3, axis=0)
+                meta_and_cards_df = pd.DataFrame(meta_and_cards)
 
-            # We only need the test portion of first states and meta_and_cards for the two online evaluations.
-            # We do not load the dataset from the disk in the manual evaluation, because the manual evaluation is
-            # only for a shallow analysis and debugging
-            data_train, data_test, _, first_states_test, _, meta_and_cards_test = train_test_split(
-                data_df, first_states_df, meta_and_cards_df, train_size=0.8, random_state=42)
+                # We only need the test portion of first states and meta_and_cards for the two online evaluations,
+                # if we want to load a pre-defined dataset.
+                # We do not load the dataset from the disk in the manual evaluation, because the manual evaluation is
+                # only for a shallow analysis and debugging
+                data_train, data_test, _, first_states_test, _, meta_and_cards_test = train_test_split(
+                    data_df, first_states_df, meta_and_cards_df, train_size=0.8, random_state=42)
 
-            dataset = DatasetDict({"train": Dataset.from_dict(data_train),
-                                   "test": Dataset.from_dict(data_test),
-                                   "first_states_test": Dataset.from_dict(first_states_test),
-                                   "meta_and_cards_test": Dataset.from_dict(meta_and_cards_test)
-                                   })
+                dataset = DatasetDict({"train": Dataset.from_dict(data_train),
+                                       "test": Dataset.from_dict(data_test),
+                                       "first_states_test": Dataset.from_dict(first_states_test),
+                                       "meta_and_cards_test": Dataset.from_dict(meta_and_cards_test)
+                                       })
+            else:
+                data_train, data_test, _, _ = train_test_split(data_df, train_size=0.8, random_state=42)
+
+                dataset = DatasetDict({"train": Dataset.from_dict(data_train),
+                                       "test": Dataset.from_dict(data_test),
+                                       })
             dataset.save_to_disk(
                 f"./datasets/{championship}-surr_grand-pr_{point_rewards}-{enc}-card_put")

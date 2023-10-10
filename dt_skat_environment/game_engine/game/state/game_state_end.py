@@ -19,6 +19,7 @@ class GameStateEnd(GameState):
     def get_next_state(self):
         pass
         # TODO GameStateStart(self.game) throws cycle import error
+        #   workaround by re-initialization
 
 
 # ------------------------------------------------------------

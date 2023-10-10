@@ -38,6 +38,8 @@ class DecisionTransformerSkatDataCollator:
         return discount_cumsum
 
     def __call__(self, features):
+        # collates data during runtime
+
         # features are already batched, but
         # we always want to put out batches of batch_size, len(features) can be < batch_size, then either we have issues
         # in forward or if we drop smaller batches, we can not train under 32 games (for overfitting)
@@ -81,7 +83,7 @@ class DecisionTransformerSkatDataCollator:
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
             rtg.append(
                 self._discount_cumsum(np.array(feature["rewards"]), gamma=0.99)[: s[-1].shape[1]].reshape(1, -1, 1)
-                # TODO set gamma
+                # set gamma to your preference (0 < gamma <= 1)
             )
             if rtg[-1].shape[1] < s[-1].shape[1]:
                 print("if true")
