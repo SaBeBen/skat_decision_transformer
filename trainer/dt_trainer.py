@@ -14,7 +14,7 @@ from transformers import DecisionTransformerModel, Trainer
 from transformers.trainer_utils import speed_metrics, IntervalStrategy
 from transformers.utils import ModelOutput
 
-from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc
+from dt_skat_environment.environment import ACT_DIM
 
 
 @dataclass
@@ -72,7 +72,6 @@ class TrainableDT(DecisionTransformerModel):
             output_hidden_states=None,
             output_attentions=None,
             return_dict=None,
-            # use_mask=True
     ) -> Union[Tuple, CustomDecisionTransformerOutput]:
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions

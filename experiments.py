@@ -10,7 +10,6 @@ import math
 import random
 # import resource
 import time
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -128,7 +127,10 @@ def run_training(args):
 
     if pretrained_model_path is not None:
         print(f"\nTrying to load pre-trained model from {pretrained_model_path}...\n")
-        pretrained_model = TrainableDT.from_pretrained(pretrained_model_path)
+
+        # uses a mask when employing one-hot encoding
+        use_mask = hand_encoding == "one-hot"
+        pretrained_model = TrainableDT.from_pretrained(pretrained_model_path, use_mask)
         model = pretrained_model
 
         if model.config.state_dim != state_dim:
@@ -172,7 +174,7 @@ def run_training(args):
         training_args.evaluation_strategy = "steps"
         training_args.eval_steps = 500
 
-    trainer = DTTrainer(  # CustomDTTrainer
+    trainer = DTTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset["train"],
@@ -197,8 +199,6 @@ def run_training(args):
     #                     skat_and_cs=skat_and_cs,
     #                     correct_actions=actions_table)
 
-
-# ------------------------------------------------------------------------------------
 
 # Function that gets an action from the model using autoregressive prediction
 # with a window of the previous 20 timesteps. We only need a maximum of 12 timesteps
@@ -238,15 +238,15 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     return action_preds[0, -1]
 
 
-def evaluate_in_env(model: TrainableDT,
-                    point_reward: bool,
-                    state_dim: int,
-                    card_enc: str,
-                    first_states: List[np.ndarray],
-                    meta_and_cards_game: List[np.ndarray],
-                    skat_and_cs: List[np.ndarray],
-                    correct_actions: List,
-                    eval_steps: int = 50) -> None:
+def evaluate_in_env(model,
+                    point_reward,
+                    state_dim,
+                    card_enc,
+                    first_states,
+                    meta_and_cards_game,
+                    skat_and_cs,
+                    correct_actions,
+                    eval_steps=50):
     """
     Less efficient, basic manual evaluation, actually plays Skat in background:
 
@@ -418,8 +418,10 @@ def run_online_eval(args):
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
 
+    use_mask = True
+
     # load model to play against
-    pretrained_model = TrainableDT.from_pretrained(pretrained_model)
+    pretrained_model = TrainableDT.from_pretrained(pretrained_model, use_mask)
 
     print(f"\nLoading data from championship {championship}...")
     data, _, first_states, meta_and_cards, _, _ = data_pipeline.get_states_actions_rewards(
@@ -460,7 +462,7 @@ def run_online_eval(args):
 def eval_three_agents(model, point_reward, state_dim, card_enc, game_idx,
                       meta_and_cards=None,
                       first_game_states=None,
-                      scale=1):
+                      scale=1.0):
     # scale is employed as follows: current_return = target_return - latest_reward / scale
     # should take a value
 
@@ -489,7 +491,7 @@ def eval_three_agents(model, point_reward, state_dim, card_enc, game_idx,
         # build the environment for the evaluation by passing every perspective
         states = env.online_reset(meta_and_cards[j], first_game_states[games_idx])
 
-        target_return = [0] * 3
+        target_return = [0.0] * 3
 
         # as the maximum reward differs for defenders and declarer,
         # we have to differ to set the reward to the double of the maximum possible
@@ -694,8 +696,11 @@ def play_with_two(args):
     random_activated = args['random_player']
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(hand_encoding)
+
+    use_mask = True
+
     # Load pre-trained model to play against
-    pretrained_model = TrainableDT.from_pretrained(pretrained_model)
+    pretrained_model = TrainableDT.from_pretrained(pretrained_model, use_mask)
 
     pretrained_model.config.state_dim = state_dim
 
