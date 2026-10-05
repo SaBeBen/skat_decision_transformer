@@ -14,11 +14,12 @@ class Agent:
     # whether the agent's scores already determine the action (no sampling from them)
     deterministic = False
 
-    def action_probs(self, env, player_id, states, actions, rewards, rtg, t) -> np.ndarray:
+    def action_probs(self, env, player_id, trajectory, t) -> np.ndarray:
         """
         :param env: the online environment.
         :param player_id: the acting player.
-        :param states, actions, rewards, rtg: the trajectory of the player up to the current time step t.
+        :param trajectory: dict with the lists "states", "actions", "rewards", "rtg" and "legal" of the player up to
+            the current time step t.
         :return: a non-negative score for each of the 12 hand positions.
         """
         raise NotImplementedError
@@ -28,13 +29,15 @@ class DTAgent(Agent):
     def __init__(self, model):
         self.model = model
 
-    def action_probs(self, env, player_id, states, actions, rewards, rtg, t):
+    def action_probs(self, env, player_id, trajectory, t):
         return get_action(self.model,
-                          torch.from_numpy(np.asarray(states[:t + 1], dtype=np.float32)),
-                          torch.from_numpy(np.asarray(actions[:t + 1], dtype=np.float32)),
-                          torch.from_numpy(np.asarray(rewards[:t + 1], dtype=np.float32)),
-                          torch.tensor(rtg[:t + 1], dtype=torch.float32),
-                          torch.arange(t + 1).reshape(1, -1)).numpy()
+                          torch.from_numpy(np.asarray(trajectory["states"][:t + 1], dtype=np.float32)),
+                          torch.from_numpy(np.asarray(trajectory["actions"][:t + 1], dtype=np.float32)),
+                          torch.from_numpy(np.asarray(trajectory["rewards"][:t + 1], dtype=np.float32)),
+                          torch.tensor(trajectory["rtg"][:t + 1], dtype=torch.float32),
+                          torch.arange(t + 1).reshape(1, -1),
+                          action_mask=torch.from_numpy(np.asarray(trajectory["legal"][:t + 1], dtype=np.float32))
+                          ).numpy()
 
 
 class RandomAgent(Agent):
@@ -44,7 +47,7 @@ class RandomAgent(Agent):
     def __init__(self, rng=None):
         self.rng = rng if rng is not None else np.random.default_rng()
 
-    def action_probs(self, env, player_id, states, actions, rewards, rtg, t):
+    def action_probs(self, env, player_id, trajectory, t):
         legal = np.flatnonzero(env.legal_actions(player_id))
         probs = np.zeros(ACT_DIM)
         probs[self.rng.choice(legal)] = 1
@@ -55,7 +58,7 @@ class HumanAgent(Agent):
     """Asks for the card to play on the command line."""
     deterministic = True
 
-    def action_probs(self, env, player_id, states, actions, rewards, rtg, t):
+    def action_probs(self, env, player_id, trajectory, t):
         player = env.game.players[player_id]
         legal = np.flatnonzero(env.legal_actions(player_id))
 

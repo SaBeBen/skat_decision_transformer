@@ -6,7 +6,7 @@ from dt_skat_environment.environment import ACT_DIM
 # Function that gets an action from the model using autoregressive prediction
 # with a window of the previous 12 timesteps (one game)
 @torch.no_grad()
-def get_action(model, states, actions, rewards, returns_to_go, timesteps):
+def get_action(model, states, actions, rewards, returns_to_go, timesteps, action_mask=None):
     # This implementation does not condition on past rewards
 
     states = states.reshape(1, -1, model.config.state_dim)
@@ -28,6 +28,9 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     actions = torch.cat([torch.zeros((1, padding, ACT_DIM)), actions], dim=1).float()
     returns_to_go = torch.cat([torch.zeros((1, padding, 1)), returns_to_go], dim=1).float()
     timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
+    if action_mask is not None:
+        action_mask = action_mask.reshape(1, -1, ACT_DIM)[:, -model.config.max_ep_len:]
+        action_mask = torch.cat([torch.zeros((1, padding, ACT_DIM)), action_mask.float()], dim=1).to(model.device)
 
     # perform the prediction on the device of the model (e.g. for online training on a GPU)
     device = model.device
@@ -39,5 +42,6 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
         timesteps=timesteps.to(device),
         attention_mask=attention_mask.to(device),
         return_dict=False,
+        action_mask=action_mask,
     )
     return action_preds[0, -1].cpu()

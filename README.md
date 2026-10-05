@@ -125,9 +125,10 @@ There are four different card encodings (with their argument to use them via "ex
 - compressed one-hot (one-hot_comp)
 - compressed mixed (mixed_comp)
 
-Only the one-hot encoding is possible when masking, as masking has to be specific for an encoding. We choose the one-hot
-encoding to mask.
-Without masking in training, the others can be used as well. One has to change the
+The data pipeline also records the legal actions of the game engine for every time step. The data collator passes them
+to the model as `action_mask`, which restricts the predictions to legal cards for every encoding and game variant.
+Without these masks (e.g. datasets created before), the model falls back to a rule mask derived from the one-hot state
+representation, which only supports suit games.
 
 The data directory includes the raw data in csv format. The format of the data is explained in another README in
 skat_decision_transformer/data.

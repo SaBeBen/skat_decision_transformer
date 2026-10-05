@@ -118,6 +118,7 @@ def play_game(env: Env,
     actions = [[] for _ in range(3)]
     rewards = [[] for _ in range(3)]
     rtg = [[float(target_returns[pl])] for pl in range(3)]
+    legal_masks = [[] for _ in range(3)]
 
     mismatches, decisions = 0, 0
     put_card_points = 0
@@ -125,9 +126,11 @@ def play_game(env: Env,
     def decide(player_id, t):
         nonlocal mismatches, decisions
         legal = env.legal_actions(player_id)
+        legal_masks[player_id][-1] = legal
         agent = seat_agents[player_id]
-        probs = agent.action_probs(env, player_id, states[player_id], actions[player_id], rewards[player_id],
-                                   rtg[player_id], t)
+        trajectory = {"states": states[player_id], "actions": actions[player_id], "rewards": rewards[player_id],
+                      "rtg": rtg[player_id], "legal": legal_masks[player_id]}
+        probs = agent.action_probs(env, player_id, trajectory, t)
         card_index, mismatch = select_card(probs, legal, greedy or agent.deterministic, temperature, rng)
         mismatches += mismatch
         decisions += 1
@@ -137,6 +140,7 @@ def play_game(env: Env,
         for pl in range(3):
             actions[pl].append(np.zeros(ACT_DIM, dtype=np.float32))
             rewards[pl].append(0.0)
+            legal_masks[pl].append(np.zeros(ACT_DIM, dtype=np.int8))
 
         next_states = [None, None, None]
 
@@ -208,6 +212,7 @@ def play_game(env: Env,
         "states": np.stack(states[pl][:MAX_EPISODE_LENGTH]).reshape(MAX_EPISODE_LENGTH, state_dim),
         "actions": np.stack(actions[pl]),
         "rewards": np.asarray(rewards[pl], dtype=np.float32),
+        "legal": np.stack(legal_masks[pl]),
     } for pl in range(3)]
 
     return {

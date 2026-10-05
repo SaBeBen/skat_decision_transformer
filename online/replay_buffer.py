@@ -7,7 +7,8 @@ class TrajectoryReplayBuffer:
     """
     FIFO replay buffer over whole trajectories (games from the perspective of one player), as in the Online DT.
 
-    Trajectories are dicts with "states" (12, state_dim), "actions" (12, 12) and "rewards" (12,).
+    Trajectories are dicts with "states" (12, state_dim), "actions" (12, 12), "rewards" (12,) and optionally the
+    legal actions "legal" (12, 12).
     The buffer can be passed directly to the DecisionTransformerSkatDataCollator, which samples games, cuts them at a
     random time step and computes the returns-to-go from the stored rewards. As the returns-to-go are always computed
     from the achieved rewards, this realises the hindsight return relabelling of the Online DT.
@@ -38,11 +39,16 @@ class TrajectoryReplayBuffer:
             all trajectories if None.
         :return: the number of added trajectories.
         """
-        trajectories = [{
-            "states": np.stack(data["states"][i]).astype(np.float32),
-            "actions": np.asarray(data["actions"][i], dtype=np.float32),
-            "rewards": np.asarray(data["rewards"][i], dtype=np.float32).reshape(-1),
-        } for i in range(len(data["states"]))]
+        trajectories = []
+        for i in range(len(data["states"])):
+            trajectory = {
+                "states": np.stack(data["states"][i]).astype(np.float32),
+                "actions": np.asarray(data["actions"][i], dtype=np.float32),
+                "rewards": np.asarray(data["rewards"][i], dtype=np.float32).reshape(-1),
+            }
+            if "legal" in data:
+                trajectory["legal"] = np.asarray(data["legal"][i], dtype=np.int8)
+            trajectories.append(trajectory)
 
         if top_k is not None:
             trajectories.sort(key=lambda traj: traj["rewards"].sum(), reverse=True)

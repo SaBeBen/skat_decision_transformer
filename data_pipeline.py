@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 from dt_skat_environment.card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
-from dt_skat_environment.environment import Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
+from dt_skat_environment.environment import legal_card_mask, pad_steps, Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
 
 from dt_skat_environment.game_engine.game.state.game_state_bid import PutDownSkatAction, BidCallAction, BidPassAction, \
     PickUpSkatAction
@@ -176,6 +176,8 @@ def get_states_actions_rewards(
     game_state_table = [[] * state_dim * 12] * amount_games * len_p
     actions_table = [[] * ACT_DIM * 12] * amount_games * len_p
     rewards_table = [[] * 12] * amount_games * len_p
+    # legal actions of the perspective player at every time step
+    legal_table = [[] * 12] * amount_games * len_p
 
     # use an own index to access the card sequence data, as the GameID is left out
     cs_index = 0
@@ -195,6 +197,15 @@ def get_states_actions_rewards(
                 break
 
             env = Env(enc=card_enc)
+
+            legal_masks = []
+
+            def record_step(putting=False, can_play=True):
+                # legal actions of the perspective player at the current state
+                if can_play:
+                    legal_masks.append(legal_card_mask(env.game, current_player, putting=putting))
+                else:
+                    legal_masks.append(np.zeros(ACT_DIM, dtype=np.int8))
 
             # player_id: ID of current solo player
             # trump: game the soloist plays
@@ -322,6 +333,7 @@ def get_states_actions_rewards(
                     actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                     # insert rewards
                     rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+                    legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
                     continue
 
                 env.game.get_declarer().cards.sort()
@@ -346,6 +358,7 @@ def get_states_actions_rewards(
                     try:
                         cat_action[current_player.cards.index(skat1)] = 1
                         actions.append(cat_action)
+                        record_step(putting=True)
                     except:  # ValueError:
                         game_state, actions, rewards = \
                             env.surrender(won, current_player, soloist_points, 0, game_state, actions, rewards,
@@ -360,6 +373,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+                        legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
                         continue
 
                     try:
@@ -380,6 +394,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+                        legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
                         continue
 
                     # the soloist knows how many points he possesses through the Skat,
@@ -398,6 +413,7 @@ def get_states_actions_rewards(
                     try:
                         cat_action[current_player.cards.index(skat2)] = 1
                         actions.append(cat_action)
+                        record_step(putting=True)
                     except:  # ValueError:
                         skip = True
                         game_state, actions, rewards = \
@@ -413,6 +429,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+                        legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
                         continue
 
                     try:
@@ -433,6 +450,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+                        legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
                         continue
 
                     # the soloist knows how many points he possesses through the Skat,
@@ -453,6 +471,8 @@ def get_states_actions_rewards(
 
                     # there is no action during the Skat putting for the defenders
                     actions += [[0] * ACT_DIM, [0] * ACT_DIM]
+                    record_step(can_play=False)
+                    record_step(can_play=False)
                     rewards += [0, 0]
 
                     # + game_level_bonus
@@ -477,6 +497,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+                        legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
                         continue
             else:
                 # if the game is surrendered instantly
@@ -492,6 +513,7 @@ def get_states_actions_rewards(
                     actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                     # insert rewards
                     rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+                    legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
                     continue
 
                 # if hand is played, show to not put a card
@@ -499,6 +521,8 @@ def get_states_actions_rewards(
 
                 # there is no action during the Skat putting when playing hand
                 actions.extend([[0] * ACT_DIM, [0] * ACT_DIM])
+                record_step(can_play=False)
+                record_step(can_play=False)
                 rewards.extend([0, 0])
 
                 # if hand is played, there are two identical game states from the perspective of every player
@@ -542,6 +566,7 @@ def get_states_actions_rewards(
                         cat_action[current_player.cards.index(
                             convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick - 1]))] = 1
                         actions.append(cat_action)
+                        record_step()
                     except:  # ValueError:
                         skip = True
                         game_state, actions, rewards = \
@@ -582,6 +607,7 @@ def get_states_actions_rewards(
                             current_player.cards.index(
                                 convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick]))] = 1
                         actions.append(cat_action)
+                        record_step()
                     except:  # ValueError:
                         skip = True
                         game_state, actions, rewards = \
@@ -622,6 +648,7 @@ def get_states_actions_rewards(
                         cat_action[current_player.cards.index(
                             convert_numerical_to_card(skat_and_cs[cs_index, 3 * trick + 1]))] = 1
                         actions.append(cat_action)
+                        record_step()
                     except:  # ValueError:
                         skip = True
                         game_state, actions, rewards = \
@@ -700,6 +727,7 @@ def get_states_actions_rewards(
             actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
             # insert rewards
             rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
+            legal_table[3 * cs_index + i] = pad_steps(legal_masks, ACT_DIM)
 
         if skip:
             # handling of malicious logging in data: the whole game is removed below
@@ -716,6 +744,7 @@ def get_states_actions_rewards(
         game_state_table = [game_state_table[k] for k in keep_rows]
         actions_table = [actions_table[k] for k in keep_rows]
         rewards_table = [rewards_table[k] for k in keep_rows]
+        legal_table = [legal_table[k] for k in keep_rows]
         meta_and_cards = meta_and_cards[keep_games]
         skat_and_cs = skat_and_cs[keep_games]
 
@@ -726,6 +755,7 @@ def get_states_actions_rewards(
         "states": game_state_table,
         "actions": actions_table,
         "rewards": rewards_table,
+        "legal": legal_table,
     }, card_error_games, first_states, \
         meta_and_cards, actions_table, skat_and_cs
 

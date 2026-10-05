@@ -75,7 +75,12 @@ class TrainableDT(DecisionTransformerModel):
             output_hidden_states=None,
             output_attentions=None,
             return_dict=None,
+            action_mask=None,
     ) -> Union[Tuple, CustomDecisionTransformerOutput]:
+        """
+        :param action_mask: optional legal actions of the game engine per time step (batch, seq, act_dim). If given,
+            it replaces the rule mask derived from the one-hot state representation (which only supports suit games).
+        """
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -149,7 +154,16 @@ class TrainableDT(DecisionTransformerModel):
         # The rules are included by looking at first open card, played cards and colour (including trump_enc),
         # and the possible hand length (prevent out-of-bounds actions)
 
-        if self.use_mask:
+        if action_mask is not None:
+            legal = action_mask.to(self.device).bool()
+            # the taken action is always valid (protects against inconsistently logged data)
+            legal = legal | actions.to(self.device).bool()
+            # time steps without any legal action (e.g. defenders during Skat putting) are handled like put_card = 0
+            put_card_mask_zeros = legal.any(dim=2, keepdim=True).repeat(1, 1, ACT_DIM).to(dtype=self.dtype)
+            illegal = (1.0 - legal.to(dtype=self.dtype)) * torch.finfo(self.dtype).min
+            # rows without legal actions stay finite (they are zeroed after the softmax)
+            action_preds = action_preds + illegal * put_card_mask_zeros
+        elif self.use_mask:
             # when wanting to train with a mask of legal cards
             # (in bounds is guaranteed by put_card_mask)
 

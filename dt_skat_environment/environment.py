@@ -299,6 +299,35 @@ def calculate_kinback_scheme(hand_cards: List[Card], pos: int) -> Tuple[int, int
     return highest_score, trump + 9
 
 
+def legal_card_mask(game: Game, player: Player, putting: bool = False) -> np.ndarray:
+    """
+    Legal actions of a player as a mask over the 12 hand positions.
+
+    :param game: the game in the trick taking phase (or Skat putting).
+    :param player: the player to act.
+    :param putting: whether the player puts a card into the Skat (every hand card is allowed).
+    :return: array of length ACT_DIM, 1 if the card at the hand position can be played, 0 if not.
+    """
+    mask = np.zeros(ACT_DIM, dtype=np.int8)
+    if putting:
+        mask[:len(player.cards)] = 1
+        return mask
+
+    for i, card in enumerate(player.cards):
+        if game.trick.is_valid_card_move(game.game_variant, player, card):
+            mask[i] = 1
+    return mask
+
+
+def pad_steps(rows: list, width: int, dtype=np.int8, fill=0) -> np.ndarray:
+    """Pads or truncates per time step information to the length of a game."""
+    padded = np.full((MAX_EPISODE_LENGTH, width), fill, dtype=dtype)
+    rows = rows[:MAX_EPISODE_LENGTH]
+    if rows:
+        padded[:len(rows)] = np.asarray(rows, dtype=dtype).reshape(len(rows), width)
+    return padded
+
+
 def get_base_value(game_variant: GameVariant) -> int:
     if isinstance(game_variant, GameVariantSuit):
         return 9 + game_variant.trump_suit.value
@@ -1001,22 +1030,17 @@ class Env:
         :param current_player_id: id of the player to act.
         :return: array of length ACT_DIM, 1 if the card at the hand position can be played, 0 if not.
         """
-        mask = np.zeros(ACT_DIM, dtype=np.int8)
         player = self.game.players[current_player_id]
 
         if not self.skat_put[1]:
             if player == self.game.get_declarer() and not self.hand:
-                mask[:len(player.cards)] = 1
-            return mask
+                return legal_card_mask(self.game, player, putting=True)
+            return np.zeros(ACT_DIM, dtype=np.int8)
 
         if not self.game.trick.can_move(player):
-            return mask
+            return np.zeros(ACT_DIM, dtype=np.int8)
 
-        for i, card in enumerate(player.cards):
-            if self.game.trick.is_valid_card_move(self.game.game_variant, player, card):
-                mask[i] = 1
-
-        return mask
+        return legal_card_mask(self.game, player)
 
     def update_state(self, game_state):
         # padding without padding cards in environment
