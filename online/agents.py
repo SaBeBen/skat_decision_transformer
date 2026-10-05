@@ -7,6 +7,8 @@ import numpy as np
 import torch
 
 from dt_skat_environment.environment import ACT_DIM
+from dt_skat_environment.game_engine.game.game_variant import GameVariantNull
+from dt_skat_environment.game_engine.model.card import Card
 from trainer.inference import get_action
 
 
@@ -51,6 +53,71 @@ class RandomAgent(Agent):
         legal = np.flatnonzero(env.legal_actions(player_id))
         probs = np.zeros(ACT_DIM)
         probs[self.rng.choice(legal)] = 1
+        return probs
+
+
+class RuleAgent(Agent):
+    """
+    A simple rule-based player as a fixed, diverse opponent:
+    - puts the most valuable side cards (no aces) into the Skat,
+    - wins a trick as cheaply as possible, gives points to a winning partner and otherwise plays the cheapest card,
+    - leads trumps as declarer and aces as defender,
+    - avoids winning tricks as declarer in null games.
+    """
+    deterministic = True
+
+    @staticmethod
+    def _cost(card, variant):
+        # card points first, trumps are more valuable than side cards
+        return card.get_value() + (20 if variant.is_trump(card) else 0)
+
+    def action_probs(self, env, player_id, trajectory, t):
+        game = env.game
+        variant = game.game_variant
+        player = game.players[player_id]
+        legal = np.flatnonzero(env.legal_actions(player_id))
+        cards = {index: player.cards[index] for index in legal}
+        is_declarer = player == game.get_declarer()
+        null_game = isinstance(variant, GameVariantNull)
+
+        if t < 2:
+            # Skat putting
+            side = [i for i, card in cards.items() if not variant.is_trump(card) and card.face is not Card.Face.ACE]
+            candidates = side if side else list(cards)
+            choice = max(candidates, key=lambda i: cards[i].get_value())
+        elif not game.trick.stack:
+            # leading a trick
+            if null_game:
+                choice = min(cards, key=lambda i: GameVariantNull.NULL_ORDER.index(cards[i].face))
+            elif is_declarer and any(variant.is_trump(card) for card in cards.values()):
+                trumps = [i for i, card in cards.items() if variant.is_trump(card)]
+                choice = max(trumps, key=lambda i: (cards[i].face is Card.Face.JACK, cards[i].face.value,
+                                                    cards[i].suit.value))
+            else:
+                aces = [i for i, card in cards.items() if card.face is Card.Face.ACE and not variant.is_trump(card)]
+                choice = aces[0] if aces else min(cards, key=lambda i: self._cost(cards[i], variant))
+        else:
+            open_cards = game.trick.get_open_cards()
+            highest = variant.get_highest_card(open_cards)
+            winner = next(p for p, card in game.trick.stack if card == highest)
+            partner_wins = not is_declarer and winner != game.get_declarer()
+            winning = [i for i, card in cards.items() if variant.get_highest_card(open_cards + [card]) == card]
+
+            if null_game:
+                losing = [i for i in cards if i not in winning]
+                pool = losing if (is_declarer and losing) else list(cards)
+                choice = max(pool, key=lambda i: GameVariantNull.NULL_ORDER.index(cards[i].face)) if is_declarer \
+                    else min(pool, key=lambda i: GameVariantNull.NULL_ORDER.index(cards[i].face))
+            elif partner_wins:
+                # give points to the partner
+                choice = max(cards, key=lambda i: cards[i].get_value() - (20 if variant.is_trump(cards[i]) else 0))
+            elif winning:
+                choice = min(winning, key=lambda i: self._cost(cards[i], variant))
+            else:
+                choice = min(cards, key=lambda i: self._cost(cards[i], variant))
+
+        probs = np.zeros(ACT_DIM)
+        probs[choice] = 1
         return probs
 
 

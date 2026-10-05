@@ -128,11 +128,14 @@ python online_training.py --pretrained_model "games_all-encoding_one-hot-point_r
 
 Each iteration of [online_training.py](online_training.py)
 1. plays `--games_per_iter` games on random deals. Each seat is played by the learner with probability
-   `--learner_seat_prob`, otherwise by a frozen opponent from a pool containing the pre-trained model and snapshots of
-   the learner (`--snapshot_every`, `--pool_size`). The learner samples its actions from its policy, restricted to the
+   `--learner_seat_prob`, otherwise by a frozen opponent from a pool containing the pre-trained model, a rule-based
+   player (`--rule_opponent`) and snapshots of the learner (`--snapshot_every`, `--pool_size`). With
+   `--opponent_sampling pfsp`, opponents the learner loses against are sampled more often (prioritised fictitious
+   self-play). The learner samples its actions from its policy, restricted to the
    legal cards of the game engine ([online/self_play.py](online/self_play.py)),
 2. adds the learner's trajectories to a FIFO replay buffer ([online/replay_buffer.py](online/replay_buffer.py)), which
-   is initially seeded with offline games (`--offline_games`). The returns-to-go are computed from the achieved rewards
+   is initially seeded with offline games (`--offline_games`). With `--buffer_filter_quantile`, only trajectories whose
+   return reaches this quantile of the recent returns of their role are kept (selective expert iteration). The returns-to-go are computed from the achieved rewards
    (hindsight return relabelling),
 3. performs `--updates_per_iter` gradient steps with the ODT objective: the negative log-likelihood of the buffer's
    actions with a lower bound on the policy entropy (`--target_entropy`), enforced by a learned temperature

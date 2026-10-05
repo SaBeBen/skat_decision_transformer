@@ -4,7 +4,8 @@ following the Online Decision Transformer (Zheng et al., 2022, https://arxiv.org
 
 Each iteration
 1. plays games on random deals; every seat is either the learner (sampling from its stochastic policy) or a frozen
-   opponent from a pool (the pre-trained model and snapshots of the learner),
+   opponent from a pool (the pre-trained model, a rule-based player and snapshots of the learner, optionally
+   sampled by prioritised fictitious self-play),
 2. adds the trajectories of the learner's seats to a FIFO replay buffer (returns-to-go are relabelled with the
    achieved rewards by the data collator),
 3. updates the learner on the buffer with the entropy-regularised ODT objective (online/odt.py),
@@ -13,6 +14,7 @@ Each iteration
 
 import argparse
 import copy
+from collections import deque
 import os
 import random
 import time
@@ -24,6 +26,7 @@ from torch.utils.tensorboard import SummaryWriter
 import data_pipeline
 from dt_skat_environment.environment import Env, get_dims_in_enc
 from experiments import file_check
+from online.agents import RuleAgent
 from online.evaluation import duplicate_evaluation
 from online.odt import ODTUpdater
 from online.replay_buffer import TrajectoryReplayBuffer
@@ -37,17 +40,75 @@ from utils import str2bool
 CARD_ENC = "one-hot"  # the rule mask of the model (and the pre-trained models) require the one-hot encoding
 
 
-def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=None, declaration_examples=None):
+class OpponentPool:
+    """
+    Frozen opponents of the learner. With prioritised fictitious self-play (PFSP), opponents against which the learner
+    wins less often are sampled more often: p(opponent) ~ (1 - win rate) ^ exponent.
+    """
+
+    def __init__(self, fixed, sampling="uniform", exponent=2.0, max_snapshots=4, momentum=0.95):
+        # fixed opponents (pre-trained model, rule-based player) are never removed
+        self.opponents = list(fixed)
+        self.n_fixed = len(fixed)
+        self.win_rates = [0.5] * len(fixed)
+        self.sampling = sampling
+        self.exponent = exponent
+        self.max_snapshots = max_snapshots
+        self.momentum = momentum
+
+    def __len__(self):
+        return len(self.opponents)
+
+    def sample(self, rng) -> int:
+        if self.sampling == "pfsp":
+            weights = (1.0 - np.asarray(self.win_rates)) ** self.exponent + 1e-3
+            return int(rng.choice(len(self.opponents), p=weights / weights.sum()))
+        return int(rng.integers(len(self.opponents)))
+
+    def update(self, index: int, learner_won: bool) -> None:
+        self.win_rates[index] = self.momentum * self.win_rates[index] + (1 - self.momentum) * float(learner_won)
+
+    def add_snapshot(self, model) -> None:
+        self.opponents.append(model)
+        self.win_rates.append(0.5)
+        if len(self.opponents) - self.n_fixed > self.max_snapshots:
+            # drop the oldest snapshot
+            self.opponents.pop(self.n_fixed)
+            self.win_rates.pop(self.n_fixed)
+
+
+class ReturnFilter:
+    """
+    Selective expert iteration: only keeps trajectories of the learner whose return reaches the running quantile of
+    the recent returns of the same role (declarer or defender).
+    """
+
+    def __init__(self, quantile: float, window: int = 2000):
+        self.quantile = quantile
+        self.returns = {"declarer": deque(maxlen=window), "defender": deque(maxlen=window)}
+
+    def keep(self, trajectory, role) -> bool:
+        ret = float(np.sum(trajectory["rewards"]))
+        history = self.returns[role]
+        keep = len(history) < 50 or ret >= np.quantile(history, self.quantile)
+        history.append(ret)
+        return keep
+
+
+def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=None, declaration_examples=None,
+                  return_filter=None):
     """
     Plays n_games self-play games and returns the learner's trajectories and statistics.
 
+    :param pool: the OpponentPool.
     :param declaration: optional bidding policy to start the games.
     :param declaration_examples: list collecting (hand, declaration, achieved points) of every seat.
+    :param return_filter: optional ReturnFilter for the learner's trajectories.
     """
     learner.eval()
     trajectories = []
     stats = {"declarer_points": [], "declarer_won": [], "learner_declarer_points": [], "learner_defender_won": [],
-             "mask_mismatches": 0, "decisions": 0}
+             "mask_mismatches": 0, "decisions": 0, "filtered": 0}
 
     for _ in range(n_games):
         # seeded deals for reproducibility, disjoint from the evaluation seeds
@@ -60,21 +121,39 @@ def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=N
         is_learner = rng.random(3) < args["learner_seat_prob"]
         if not is_learner.any():
             is_learner[rng.integers(3)] = True
-        seat_models = [learner if is_learner[pl] else pool[rng.integers(len(pool))] for pl in range(3)]
+        opponents = {pl: pool.sample(rng) for pl in range(3) if not is_learner[pl]}
+        seat_models = [learner if is_learner[pl] else pool.opponents[opponents[pl]] for pl in range(3)]
 
         result = play_game(env, seat_models, first_states,
                            compute_target_returns(env, args["point_rewards"], args["rtg_scale"], seat_models),
                            greedy=False, temperature=args["temperature"], rng=rng,
                            reward_convention=args["reward_convention"])
 
-        trajectories += [result["trajectories"][pl] for pl in range(3) if is_learner[pl]]
+        declarer_id = result["declarer_id"]
+        for pl in range(3):
+            if not is_learner[pl]:
+                continue
+            role = "declarer" if pl == declarer_id else "defender"
+            if return_filter is None or return_filter.keep(result["trajectories"][pl], role):
+                trajectories.append(result["trajectories"][pl])
+            else:
+                stats["filtered"] += 1
+
+        # the outcome against the opponents if the learner only plays on one side
+        learner_sides = {pl == declarer_id for pl in range(3) if is_learner[pl]}
+        if len(learner_sides) == 1:
+            learner_is_declarer = learner_sides.pop()
+            learner_won = result["declarer_won"] == learner_is_declarer
+            for pl, index in opponents.items():
+                # only opponents of the other party
+                if (pl == declarer_id) != learner_is_declarer:
+                    pool.update(index, learner_won)
 
         if declaration is not None and declaration_examples is not None:
             # hindsight: the declaration of each seat is labelled with the points it achieved
             declaration_examples += [(state, index, result["game_points"][pl])
                                      for pl, (state, index) in enumerate(declaration.last_choices)]
 
-        declarer_id = result["declarer_id"]
         stats["declarer_points"].append(result["game_points"][declarer_id])
         stats["declarer_won"].append(result["declarer_won"])
         if is_learner[declarer_id]:
@@ -97,7 +176,9 @@ def run_online_training(args):
 
     _, _, state_dim = get_dims_in_enc(CARD_ENC)
 
-    head_kwargs = {"hidden_card_head": True, "hidden_loss_weight": args["hidden_loss_weight"]}         if args["hidden_card_head"] else {}
+    head_kwargs = {}
+    if args["hidden_card_head"]:
+        head_kwargs = {"hidden_card_head": True, "hidden_loss_weight": args["hidden_loss_weight"]}
     learner = load_trainable_dt(args["pretrained_model"], use_mask=True, **head_kwargs).to(device)
     if learner.config.state_dim != state_dim:
         raise ValueError("The pre-trained model does not use the one-hot state representation.")
@@ -110,7 +191,10 @@ def run_online_training(args):
 
     # the frozen pre-trained model is the first opponent and the baseline of the evaluation
     pretrained = copy.deepcopy(learner).eval()
-    pool = [pretrained]
+    fixed_opponents = [pretrained] + ([RuleAgent()] if args["rule_opponent"] else [])
+    pool = OpponentPool(fixed_opponents, sampling=args["opponent_sampling"], exponent=args["pfsp_exponent"],
+                        max_snapshots=max(args["pool_size"] - len(fixed_opponents), 0))
+    return_filter = ReturnFilter(args["buffer_filter_quantile"]) if args["buffer_filter_quantile"] > 0 else None
 
     buffer = TrajectoryReplayBuffer(args["buffer_size"])
     offline_games = slice(args["offline_games"][0], args["offline_games"][1])
@@ -163,7 +247,8 @@ def run_online_training(args):
 
         # 1. self-play with the stochastic policy of the learner
         trajectories, stats, game_counter = collect_games(learner, pool, args["games_per_iter"], args, rng,
-                                                          game_counter, declaration, declaration_examples)
+                                                          game_counter, declaration, declaration_examples,
+                                                          return_filter)
         buffer.extend(trajectories)
         collect_time = time.time() - start
 
@@ -204,6 +289,9 @@ def run_online_training(args):
                               float(np.mean(stats["learner_defender_won"])), step)
         writer.add_scalar("selfplay/mask_mismatch_rate", stats["mask_mismatches"] / max(stats["decisions"], 1), step)
         writer.add_scalar("buffer/size", len(buffer), step)
+        writer.add_scalar("buffer/filtered", stats["filtered"], step)
+        for index, win_rate in enumerate(pool.win_rates):
+            writer.add_scalar(f"pool/learner_win_rate_{index}", win_rate, step)
         writer.add_scalar("time/collect_s", collect_time, step)
         writer.add_scalar("time/iteration_s", time.time() - start, step)
 
@@ -215,10 +303,7 @@ def run_online_training(args):
 
         # 3. add a frozen snapshot of the learner to the pool of opponents
         if args["snapshot_every"] > 0 and iteration % args["snapshot_every"] == 0:
-            pool.append(copy.deepcopy(learner).eval())
-            if len(pool) > args["pool_size"]:
-                # always keep the pre-trained model, drop the oldest snapshot
-                pool.pop(1)
+            pool.add_snapshot(copy.deepcopy(learner).eval())
 
         # 4. duplicate evaluation against the pre-trained model
         if args["eval_games"] > 0 and (iteration % args["eval_every"] == 0 or iteration == args["iterations"]):
@@ -304,8 +389,17 @@ def get_parser():
                         help='Probability that a seat is played by the learner instead of a frozen opponent.')
     parser.add_argument('--snapshot_every', type=int, default=10,
                         help='Add a frozen snapshot of the learner to the opponent pool every n iterations.')
-    parser.add_argument('--pool_size', type=int, default=5,
-                        help='Maximum number of frozen opponents including the pre-trained model.')
+    parser.add_argument('--pool_size', type=int, default=6,
+                        help='Maximum number of frozen opponents including the pre-trained model and the rule-based '
+                             'player.')
+    parser.add_argument('--rule_opponent', type=str2bool, default=True,
+                        help='Add a rule-based player to the pool of opponents.')
+    parser.add_argument('--opponent_sampling', type=str, default='pfsp', choices=['uniform', 'pfsp'],
+                        help='Sample opponents uniformly or prioritised by the losses of the learner against them.')
+    parser.add_argument('--pfsp_exponent', type=float, default=2.0)
+    parser.add_argument('--buffer_filter_quantile', type=float, default=0.0,
+                        help='Selective expert iteration: only add learner trajectories whose return reaches this '
+                             'quantile of the recent returns of their role (0 keeps all).')
     parser.add_argument('--eval_every', type=int, default=5)
     parser.add_argument('--eval_games', type=int, default=500, help='Number of deals of the duplicate evaluation.')
     parser.add_argument('--eval_seed', type=int, default=1_000_000_007)
