@@ -93,6 +93,15 @@ The included pre-trained models were trained with the reward convention of the t
 rewarded a second time in the first trick. Add `--reward_convention thesis` when playing with or evaluating them, so
 that the returns-to-go during play match the ones seen in training. New models use the default convention.
 
+To compare a model with a baseline (another model, `rule` for a rule-based player or `random`) on the same seeded
+deals (duplicate evaluation), every deal is played with the model as declarer against the baseline and with the model
+as both defenders against the baseline's declarer. The output contains the tournament points (Seeger-Fabian) per deal
+of both and their difference:
+
+````shell
+python experiments.py --duplicate_eval True --baseline_model rule --amount_games_to_play 1000 --reward_convention thesis --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
+````
+
 Note that due to the increased size of datasets, only the raw data tables and not the datasets are included in this
 version.
 However, the data_pipeline can read in these data (takes up to several hours) and save them into a dataset directory:

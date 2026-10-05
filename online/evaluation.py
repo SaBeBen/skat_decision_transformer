@@ -67,4 +67,12 @@ def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_
     # Seeger-Fabian points the learner gains per deal: as declarer + as defenders (40 per defender for a win)
     metrics["delta/points_per_deal"] = metrics["delta/declarer_points"] + 2 * 40 * metrics["delta/defender_win_rate"]
 
+    # head-to-head tournament points per deal: every model plays every deal once as declarer against the other model
+    # and once with both defenders against the other model's declarer
+    metrics["learner/tp_per_deal"] = metrics["learner_declarer/declarer_points"] + \
+        2 * 40 * (1 - metrics["learner_defenders/declarer_win_rate"])
+    metrics["baseline/tp_per_deal"] = metrics["learner_defenders/declarer_points"] + \
+        2 * 40 * (1 - metrics["learner_declarer/declarer_win_rate"])
+    metrics["delta/tp_per_deal"] = metrics["learner/tp_per_deal"] - metrics["baseline/tp_per_deal"]
+
     return metrics

@@ -31,7 +31,8 @@ from utils import str2bool
 from trainer.declaration import DeclarationDT, DeclarationPolicy, declarations_from_data, train_declaration_model
 from trainer.return_model import ReturnModel, train_return_model, rtg_targets
 from online.replay_buffer import trajectories_from_data
-from online.agents import HumanAgent, RandomAgent
+from online.agents import HumanAgent, RandomAgent, RuleAgent
+from online.evaluation import duplicate_evaluation
 from online.self_play import play_game, play_games, compute_target_returns
 from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
 
@@ -712,6 +713,26 @@ def run_declaration_training(args):
     print(f"Saved the declaration model to {path}")
 
 
+def run_duplicate_eval(args):
+    """Compares the model with a baseline on the same seeded deals (see online/evaluation.duplicate_evaluation)."""
+    learner = load_trainable_dt(args['pretrained_model']).eval()
+
+    if args['baseline_model'] == "rule":
+        baseline = RuleAgent()
+    elif args['baseline_model'] == "random":
+        baseline = RandomAgent(np.random.default_rng(0))
+    else:
+        baseline = load_trainable_dt(file_check(args['baseline_model'])).eval()
+
+    print(f"\nDuplicate evaluation of {args['pretrained_model']} against {args['baseline_model']} "
+          f"on {args['amount_games_to_play']} deals...")
+    metrics = duplicate_evaluation(learner, baseline, args['amount_games_to_play'],
+                                   point_rewards=args['point_rewards'], rtg_scale=args['rtg_scale'],
+                                   reward_convention=args['reward_convention'],
+                                   declaration=load_declaration_policy(args))
+    print(pd.Series(metrics).round(3).to_string())
+
+
 def load_declaration_policy(args):
     if args.get('declaration_model') is None:
         return None
@@ -804,6 +825,13 @@ if __name__ == '__main__':
     parser.add_argument('--declaration_model', type=file_check, default=None,
                         help='Declaration model in the folder "pretrained_models" for the auction when playing. '
                              'Without it, the player with the best cards plays a suit game.')
+    parser.add_argument('--duplicate_eval', type=str2bool, default=False,
+                        help='Compare --pretrained_model with --baseline_model on --amount_games_to_play seeded random '
+                             'deals, each played with the model as declarer and as defenders.')
+    parser.add_argument('--baseline_model', type=str, default='rule',
+                        help='Baseline of the duplicate evaluation: a model in "pretrained_models", "rule" or "random".')
+    parser.add_argument('--rtg_scale', type=float, default=0.7,
+                        help='Scale of the initial return-to-go in the duplicate evaluation.')
     parser.add_argument('--online_eval', type=str2bool, default=False,
                         help="Uses the pre-trained model to play online against itself."
                              " Rules out further training and evaluation of model.")
@@ -825,6 +853,8 @@ if __name__ == '__main__':
         run_declaration_training(args)
     elif not args['play_as'] is None:
         play_with_two(args)
+    elif args['duplicate_eval']:
+        run_duplicate_eval(args)
     elif args['online_eval']:
         run_online_eval(args)
     else:
