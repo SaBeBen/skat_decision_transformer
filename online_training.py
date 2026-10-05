@@ -20,7 +20,6 @@ import time
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 
 import data_pipeline
 from dt_skat_environment.environment import Env, get_dims_in_enc
@@ -67,7 +66,8 @@ def collect_games(learner, pool, n_games, args, rng, game_counter):
 
         result = play_game(env, seat_models, first_states,
                            compute_target_returns(env, args["point_rewards"], args["rtg_scale"]),
-                           greedy=False, temperature=args["temperature"], rng=rng)
+                           greedy=False, temperature=args["temperature"], rng=rng,
+                           reward_convention=args["reward_convention"])
 
         trajectories += [result["trajectories"][pl] for pl in range(3) if is_learner[pl]]
 
@@ -111,7 +111,8 @@ def run_online_training(args):
             championship=args["championship"],
             games_indices=offline_games,
             point_rewards=args["point_rewards"],
-            card_enc=CARD_ENC)
+            card_enc=CARD_ENC,
+            reward_convention=args["reward_convention"])
         added = buffer.seed_from_offline(data, top_k=args["offline_top_k"])
         print(f"Added {added} offline trajectories.")
 
@@ -182,7 +183,7 @@ def run_online_training(args):
             learner.eval()
             metrics = duplicate_evaluation(learner, pretrained, args["eval_games"], seed=args["eval_seed"],
                                            point_rewards=args["point_rewards"], rtg_scale=args["eval_rtg_scale"],
-                                           card_enc=CARD_ENC)
+                                           card_enc=CARD_ENC, reward_convention=args["reward_convention"])
             for key, value in metrics.items():
                 writer.add_scalar(f"eval/{key}", value, step)
             print("Evaluation against the pre-trained model: " +
@@ -219,6 +220,8 @@ def get_parser():
                              'Note that this favours declarers, as their returns are higher.')
     parser.add_argument('--point_rewards', type=str2bool, default=True,
                         help='Whether to use discounted Seeger-Fabian score as rewards')
+    parser.add_argument('--reward_convention', type=str, default='default', choices=['default', 'thesis'],
+                        help='"thesis" reproduces the rewards the models of the thesis were trained with.')
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', '-wd', type=float, default=5e-4)
     parser.add_argument('--warmup_steps', type=int, default=1000)

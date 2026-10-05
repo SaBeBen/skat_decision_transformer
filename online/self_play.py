@@ -1,12 +1,12 @@
 """
-Self-play rollouts in the online environment with one (possibly different) model per seat.
+Games in the online environment with one (possibly different) agent per seat.
 
-The game loop follows experiments.eval_three_agents, but
-- every seat can be controlled by a different model (learner or frozen opponent),
+- every seat can be controlled by a different agent (learner, frozen opponent, random or human player),
 - actions can be sampled from the policy (exploration) instead of taking the argmax,
-- the model's prediction is intersected with the legal actions of the game engine, so sampling never fails,
+- the agent's prediction is intersected with the legal actions of the game engine, so sampling never fails,
 - the rewards are recorded in the same convention as in the offline data (data_pipeline.get_states_actions_rewards),
-  such that collected trajectories can be mixed with offline trajectories in the replay buffer.
+  such that collected trajectories can be mixed with offline trajectories and the returns-to-go during play match
+  the ones seen in training.
 """
 
 from typing import List, Optional
@@ -15,7 +15,9 @@ import numpy as np
 import torch
 
 from dt_skat_environment.environment import Env, ACT_DIM, MAX_EPISODE_LENGTH
-from experiments import get_action
+from online.agents import as_agent
+
+REWARD_CONVENTIONS = ("default", "thesis")
 
 
 def compute_target_returns(env: Env, point_reward: bool, scale: float = 1.0) -> List[float]:
@@ -28,17 +30,7 @@ def compute_target_returns(env: Env, point_reward: bool, scale: float = 1.0) -> 
 
     for pl in range(3):
         if point_reward:
-            if sum(env.trump_enc) == 0:
-                game_points = env.game.game_variant.get_level()
-                target_return[pl] = game_points * 2
-            else:
-                if sum(env.trump_enc) == 4:
-                    base_value = 24
-                else:
-                    base_value = 9 + env.trump_enc.index(1)
-
-                level = 1 + env.game.game_variant.get_level()
-                target_return[pl] = level * base_value
+            target_return[pl] = env.get_game_value()
 
             if env.game.players[pl] == env.game.get_declarer():
                 # Seeger-Fabian score gives declarer points for winning.
@@ -60,7 +52,7 @@ def compute_target_returns(env: Env, point_reward: bool, scale: float = 1.0) -> 
     return target_return
 
 
-def select_card(action_pred: torch.Tensor,
+def select_card(action_probs,
                 legal: np.ndarray,
                 greedy: bool,
                 temperature: float = 1.0,
@@ -68,12 +60,14 @@ def select_card(action_pred: torch.Tensor,
     """
     Selects a hand position from the predicted action probabilities, restricted to the legal actions.
 
-    :return: (card index or -1 if no card can be played, whether the model put no probability on a legal card)
+    :return: (card index or -1 if no card can be played, whether the agent put no probability on a legal card)
     """
     if not legal.any():
         return -1, False
 
-    probs = action_pred.detach().cpu().numpy().astype(np.float64) * legal
+    if isinstance(action_probs, torch.Tensor):
+        action_probs = action_probs.detach().cpu().numpy()
+    probs = np.asarray(action_probs, dtype=np.float64) * legal
     mismatch = not probs.sum() > 0
     if mismatch:
         # the model's rule mask disagrees with the game engine -> fall back to a uniform choice of legal cards
@@ -90,36 +84,33 @@ def select_card(action_pred: torch.Tensor,
     return int(rng.choice(ACT_DIM, p=probs)), mismatch
 
 
-def _predict(model, states, actions, rewards, rtg, t):
-    return get_action(model,
-                      torch.from_numpy(np.asarray(states[:t + 1], dtype=np.float32)),
-                      torch.from_numpy(np.asarray(actions[:t + 1], dtype=np.float32)),
-                      torch.from_numpy(np.asarray(rewards[:t + 1], dtype=np.float32)),
-                      torch.tensor(rtg[:t + 1], dtype=torch.float32),
-                      torch.arange(t + 1).reshape(1, -1))
-
-
 def play_game(env: Env,
-              seat_models: list,
+              seat_agents: list,
               first_states: np.ndarray,
               target_returns: List[float],
               greedy: bool = False,
               temperature: float = 1.0,
-              rng: Optional[np.random.Generator] = None) -> dict:
+              rng: Optional[np.random.Generator] = None,
+              reward_convention: str = "default") -> dict:
     """
     Plays one game in an environment that was reset with env.online_reset.
 
     :param env: the environment after online_reset.
-    :param seat_models: one TrainableDT per seat (the same model can sit on several seats).
+    :param seat_agents: one agent or TrainableDT per seat (the same one can sit on several seats).
     :param first_states: the states returned by online_reset.
     :param target_returns: the initial return-to-go of each seat.
     :param greedy: whether to take the most probable card (evaluation) or sample (exploration).
     :param temperature: sampling temperature if not greedy.
     :param rng: numpy random generator for sampling.
+    :param reward_convention: "default", or "thesis" to additionally reward the put Skat in the first trick.
     :return: dict with the trajectory of each seat (states, actions, rewards in the convention of the offline data),
         the game points of each seat, the id of the declarer and the number of decisions where the rule mask of the
         model disagreed with the game engine.
     """
+    if reward_convention not in REWARD_CONVENTIONS:
+        raise ValueError(f"Unknown reward convention {reward_convention}")
+
+    seat_agents = [as_agent(agent) for agent in seat_agents]
     state_dim = env.state_dim
     declarer_id = env.game.get_declarer().get_id()
 
@@ -130,6 +121,17 @@ def play_game(env: Env,
 
     mismatches, decisions = 0, 0
     put_card_points = 0
+
+    def decide(player_id, t):
+        nonlocal mismatches, decisions
+        legal = env.legal_actions(player_id)
+        agent = seat_agents[player_id]
+        probs = agent.action_probs(env, player_id, states[player_id], actions[player_id], rewards[player_id],
+                                   rtg[player_id], t)
+        card_index, mismatch = select_card(probs, legal, greedy or agent.deterministic, temperature, rng)
+        mismatches += mismatch
+        decisions += 1
+        return card_index
 
     for t in range(MAX_EPISODE_LENGTH):
         for pl in range(3):
@@ -148,16 +150,11 @@ def play_game(env: Env,
                         state[3] = 1
                     next_states[pl] = state
 
-            legal = env.legal_actions(declarer_id)
             card_index = -1
-            if legal.any():
-                action_pred = _predict(seat_models[declarer_id], states[declarer_id], actions[declarer_id],
-                                       rewards[declarer_id], rtg[declarer_id], t)
-                card_index, mismatch = select_card(action_pred, legal, greedy, temperature, rng)
-                mismatches += mismatch
-                decisions += 1
+            if env.legal_actions(declarer_id).any():
+                card_index = decide(declarer_id, t)
 
-                # in the offline data, the declarer receives the card points of the put card
+                # the declarer receives the card points of the put card
                 put_value = env.game.players[declarer_id].cards[card_index].get_value()
                 rewards[declarer_id][-1] = put_value
                 put_card_points += put_value
@@ -173,13 +170,7 @@ def play_game(env: Env,
                 states[current_player][-1] = env.update_state(
                     torch.from_numpy(states[current_player][-1])).numpy()
 
-                legal = env.legal_actions(current_player)
-                action_pred = _predict(seat_models[current_player], states[current_player], actions[current_player],
-                                       rewards[current_player], rtg[current_player], t)
-                card_index, mismatch = select_card(action_pred, legal, greedy, temperature, rng)
-                mismatches += mismatch
-                decisions += 1
-
+                card_index = decide(current_player, t)
                 actions[current_player][-1][card_index] = 1
 
                 acting_player = current_player
@@ -190,8 +181,8 @@ def play_game(env: Env,
             for pl in range(3):
                 rewards[pl][-1] = env.game.players[pl].current_trick_points
 
-            # as in the offline data, the declarer additionally receives the points of the put Skat in the 1st trick
-            if t == 2 and not env.hand:
+            # the data of the thesis additionally rewards the declarer with the put Skat in the first trick
+            if reward_convention == "thesis" and t == 2 and not env.hand:
                 rewards[declarer_id][-1] += put_card_points
 
         for pl in range(3):

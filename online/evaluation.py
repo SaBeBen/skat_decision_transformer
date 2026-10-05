@@ -7,18 +7,20 @@ from dt_skat_environment.environment import Env
 from online.self_play import play_game, compute_target_returns
 
 
-def _play_deal(seed, seat_models_fn, point_rewards, rtg_scale, card_enc):
+def _play_deal(seed, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention):
     # the same seed gives the same deal and declarer (Kinback scheme is deterministic)
     random.seed(seed)
     env = Env(card_enc)
     first_states = env.online_reset(point_rewards=point_rewards)
     seat_models = seat_models_fn(env.game.get_declarer().get_id())
     return play_game(env, seat_models, first_states,
-                     compute_target_returns(env, point_rewards, rtg_scale), greedy=True)
+                     compute_target_returns(env, point_rewards, rtg_scale), greedy=True,
+                     reward_convention=reward_convention)
 
 
 def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_007, point_rewards: bool = True,
-                         rtg_scale: float = 0.7, card_enc: str = "one-hot") -> Dict[str, float]:
+                         rtg_scale: float = 0.7, card_enc: str = "one-hot",
+                         reward_convention: str = "default") -> Dict[str, float]:
     """
     Compares the learner to the baseline (e.g. the pre-trained DT) on the same deals (duplicate evaluation).
 
@@ -42,7 +44,7 @@ def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_
 
     for i in range(n_games):
         for name, seat_models_fn in configurations.items():
-            result = _play_deal(seed + i, seat_models_fn, point_rewards, rtg_scale, card_enc)
+            result = _play_deal(seed + i, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention)
             declarer_points[name].append(result["game_points"][result["declarer_id"]])
             declarer_won[name].append(result["declarer_won"])
 

@@ -124,7 +124,8 @@ def get_states_actions_rewards(
         perspective=(0, 1, 2),
         card_enc='mixed_comp',
         include_grand=False,
-        include_surr=False
+        include_surr=False,
+        reward_convention="default"
 ):
     """
     Load championship log data from csv files, replay the games, while at the same time transforming it into our
@@ -141,11 +142,18 @@ def get_states_actions_rewards(
     :param card_enc: The card encoding to use. "one-hot", "mixed", "mixed_comp" and "one-hot_comp" are possible.
     :param include_grand: Whether to include grand games.
     :param include_surr: Whether to include surrendered games.
+    :param reward_convention: "default", or "thesis" to reproduce the rewards of the thesis (the put Skat is rewarded
+    a second time in the first trick and rewards are stored as integers).
 
     :return: Dict of NumPy Array of states, actions and rewards. Also returns integer GameIDs from corrupt games.
     Additionally returns raw game tables for evaluation: Namely first states, meta and initial card information,
     correct actions in indexing format and the card sequence.
     """
+
+    if reward_convention not in ("default", "thesis"):
+        raise ValueError(f"Unknown reward convention {reward_convention}")
+    # the thesis stored the rewards as integers
+    reward_dtype = np.int16 if reward_convention == "thesis" else np.float32
 
     # load the meta information, initial card configuration (meta_and_cards) and the course of the game (skat_and_cs)
     meta_and_cards, skat_and_cs = get_games(championship=championship,
@@ -313,7 +321,7 @@ def get_states_actions_rewards(
                     # insert actions
                     actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                     # insert rewards
-                    rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                    rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
                     continue
 
                 env.game.get_declarer().cards.sort()
@@ -351,7 +359,7 @@ def get_states_actions_rewards(
                         # insert actions
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
-                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                        rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
                         continue
 
                     try:
@@ -371,7 +379,7 @@ def get_states_actions_rewards(
                         # insert actions
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
-                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                        rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
                         continue
 
                     # the soloist knows how many points he possesses through the Skat,
@@ -404,7 +412,7 @@ def get_states_actions_rewards(
                         # insert actions
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
-                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                        rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
                         continue
 
                     try:
@@ -424,7 +432,7 @@ def get_states_actions_rewards(
                         # insert actions
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
-                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                        rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
                         continue
 
                     # the soloist knows how many points he possesses through the Skat,
@@ -468,7 +476,7 @@ def get_states_actions_rewards(
                         # insert actions
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
-                        rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                        rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
                         continue
             else:
                 # if the game is surrendered instantly
@@ -483,7 +491,7 @@ def get_states_actions_rewards(
                     # insert actions
                     actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                     # insert rewards
-                    rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+                    rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
                     continue
 
                 # if hand is played, show to not put a card
@@ -648,7 +656,9 @@ def get_states_actions_rewards(
                 else:
                     rewards.append(current_player.current_trick_points)
 
-                    if trick == 1 and not hand and current_player.type == Player.Type.DECLARER:
+                    # the thesis rewarded the put Skat a second time in the first trick
+                    if reward_convention == "thesis" and trick == 1 and not hand \
+                            and current_player.type == Player.Type.DECLARER:
                         rewards[-1] += skat1.get_value() + skat2.get_value()
 
             # if hand is played, adding the Skat points in the end of the game simulates not knowing them
@@ -689,7 +699,7 @@ def get_states_actions_rewards(
             # insert actions
             actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
             # insert rewards
-            rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
+            rewards_table[3 * cs_index + i] = np.array([[r] for r in rewards], dtype=reward_dtype)
 
         if skip:
             # handling of malicious logging in data: the whole game is removed below

@@ -55,6 +55,10 @@ To let it play against itself with German championship starting configurations:
 python experiments.py --online_eval True --games 0 2 --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
 ````
 
+The included pre-trained models were trained with the reward convention of the thesis, in which the put Skat is
+rewarded a second time in the first trick. Add `--reward_convention thesis` when playing with or evaluating them, so
+that the returns-to-go during play match the ones seen in training. New models use the default convention.
+
 Note that due to the increased size of datasets, only the raw data tables and not the datasets are included in this
 version.
 However, the data_pipeline can read in these data (takes up to several hours) and save them into a dataset directory:

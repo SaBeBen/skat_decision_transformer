@@ -111,3 +111,24 @@ def test_legal_actions_during_skat_putting():
 
 def test_state_dims():
     assert get_dims_in_enc("one-hot")[2] == 214
+
+
+def test_reward_conventions():
+    from online.agents import RandomAgent
+    from online.self_play import play_game, compute_target_returns
+
+    results = {}
+    for convention in ("default", "thesis"):
+        random.seed(3)
+        env = Env("one-hot")
+        states = env.online_reset()
+        agents = [RandomAgent(np.random.default_rng(pl)) for pl in range(3)]
+        results[convention] = play_game(env, agents, states, compute_target_returns(env, True),
+                                        reward_convention=convention)
+
+    declarer = results["default"]["declarer_id"]
+    default, thesis = (results[c]["trajectories"][declarer]["rewards"] for c in ("default", "thesis"))
+    put_points = default[0] + default[1]
+    # the thesis rewards the put Skat a second time in the first trick
+    assert thesis[2] - default[2] == put_points
+    assert np.array_equal(default[3:11], thesis[3:11])
