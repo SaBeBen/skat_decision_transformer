@@ -103,7 +103,9 @@ def run_online_training(args):
             games_indices=offline_games,
             point_rewards=args["point_rewards"],
             card_enc=CARD_ENC,
-            reward_convention=args["reward_convention"])
+            reward_convention=args["reward_convention"],
+            include_grand=args["include_grand"],
+            include_null=args["include_null"])
         added = buffer.seed_from_offline(data, top_k=args["offline_top_k"])
         print(f"Added {added} offline trajectories.")
 
@@ -206,6 +208,10 @@ def get_parser():
                         help='Championship of the offline games used to seed the replay buffer.')
     parser.add_argument('--offline_games', type=int, nargs=2, default=(0, 2000),
                         help='Range of offline games to seed the replay buffer with. "0 0" disables seeding.')
+    parser.add_argument('--include_grand', type=str2bool, default=True,
+                        help='Whether to seed the replay buffer with grand games.')
+    parser.add_argument('--include_null', type=str2bool, default=True,
+                        help='Whether to seed the replay buffer with null games.')
     parser.add_argument('--offline_top_k', type=int, default=None,
                         help='Only seed the buffer with the top k offline trajectories by return (as in the ODT). '
                              'Note that this favours declarers, as their returns are higher.')

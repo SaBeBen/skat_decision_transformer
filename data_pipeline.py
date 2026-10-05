@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 from dt_skat_environment.card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
-from dt_skat_environment.environment import legal_card_mask, pad_steps, Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
+from dt_skat_environment.environment import NULL_GAMES, legal_card_mask, pad_steps, Env, get_trump_enc, initialise_hand_cards, get_hand_cards, ACT_DIM, get_dims_in_enc
 
 from dt_skat_environment.game_engine.game.state.game_state_bid import PutDownSkatAction, BidCallAction, BidPassAction, \
     PickUpSkatAction
@@ -22,8 +22,9 @@ POSSIBLE_CHAMPIONSHIPS = ["wc", "bl", "gc", "gtc", "rc"]
 # To see more detailed description of raw data, read README.md in data.
 def get_games(championship="wc",
               games_indices=slice(0, -1),
-              include_grand=False,
-              include_surr=False
+              include_grand=True,
+              include_surr=False,
+              include_null=True
               ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Reads in championships stored in CSV format in data folder.
@@ -89,12 +90,8 @@ def get_games(championship="wc",
     if not include_grand:
         skat_game_data = skat_game_data[(skat_game_data["Game"] != 24)]
 
-    # exclude grand and null games
-    skat_game_data = skat_game_data[
-        (skat_game_data["Game"] != 23)
-        & (skat_game_data["Game"] != 35)
-        & (skat_game_data["Game"] != 46)
-        & (skat_game_data["Game"] != 59)]
+    if not include_null:
+        skat_game_data = skat_game_data[~skat_game_data["Game"].isin(NULL_GAMES)]
 
     # get rid of games that only exist in one of the tables by merging (can occur in inconsistent data)
     merged_game = pd.merge(skat_game_data, skat_cs_data, how="inner", on="GameID")
@@ -123,14 +120,15 @@ def get_states_actions_rewards(
         point_rewards=False,
         perspective=(0, 1, 2),
         card_enc='mixed_comp',
-        include_grand=False,
+        include_grand=True,
         include_surr=False,
-        reward_convention="default"
+        reward_convention="default",
+        include_null=True
 ):
     """
     Load championship log data from csv files, replay the games, while at the same time transforming it into our
     state, action and reward representation.
-    Only processes non-surrendered suit games, but is able to output all variants.
+    Processes suit, grand and null games; surrendered games are left out by default.
 
 
     :param championship: The championship to prepare. Input: abbreviation of the championship. Only "wc" works due to
@@ -142,6 +140,7 @@ def get_states_actions_rewards(
     :param card_enc: The card encoding to use. "one-hot", "mixed", "mixed_comp" and "one-hot_comp" are possible.
     :param include_grand: Whether to include grand games.
     :param include_surr: Whether to include surrendered games.
+    :param include_null: Whether to include null games.
     :param reward_convention: "default", or "thesis" to reproduce the rewards of the thesis (the put Skat is rewarded
     a second time in the first trick and rewards are stored as integers).
 
@@ -159,7 +158,8 @@ def get_states_actions_rewards(
     meta_and_cards, skat_and_cs = get_games(championship=championship,
                                             games_indices=games_indices,
                                             include_grand=include_grand,
-                                            include_surr=include_surr)
+                                            include_surr=include_surr,
+                                            include_null=include_null)
 
     card_dim, max_hand_len, state_dim = get_dims_in_enc(card_enc)
 

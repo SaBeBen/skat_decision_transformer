@@ -745,7 +745,19 @@ class Env:
         # Return state, reward, done
         return np.array(game_state), reward, done
 
-    def online_reset(self, meta_and_cards_game=None, game_first_states=None, point_rewards=True):
+    def online_reset(self, meta_and_cards_game=None, game_first_states=None, point_rewards=True, declaration=None):
+        """
+        Starts a game in the online environment.
+
+        :param meta_and_cards_game: starting configuration of a game in the data (hands, declarer, variant).
+        :param game_first_states: the first states of the game in the data.
+        :param point_rewards: whether the Seeger-Fabian score is used.
+        :param declaration: function mapping the dealt game to a declaration dict with the keys "declarer" (id),
+            "game" (9-12 suit, 24 grand, 23/35/46/59 null), "hand" and "bid", or None if all players pass
+            (the cards are dealt again). If None, the player with the best hand according to the Kinback scheme
+            plays a suit game.
+        :return: the first state of every player.
+        """
         self.game.reset()
 
         self.point_rewards = point_rewards
@@ -800,21 +812,27 @@ class Env:
 
         else:
 
-            soloist = None
-            trump = -1
+            soloist, trump, bid = None, -1, 18
 
             while soloist is None:
-                highest_score, i = 0, 0
+                if declaration is not None:
+                    chosen = declaration(self)
+                    if chosen is not None:
+                        soloist = self.game.players[chosen["declarer"]]
+                        trump, bid = chosen["game"], chosen["bid"]
+                        self.hand = bool(chosen["hand"]) or trump in (35, 59)
+                else:
+                    highest_score, i = 0, 0
 
-                # determine the soloist with a scheme that allows a game
-                for player in self.game.players:
-                    i += 1
-                    # lets the player with the best scoring cards play
-                    kb_score, trump_player = calculate_kinback_scheme(player.cards, i)
-                    if kb_score > highest_score:
-                        highest_score = kb_score
-                        soloist = player
-                        trump = trump_player
+                    # determine the soloist with a scheme that allows a game
+                    for player in self.game.players:
+                        i += 1
+                        # lets the player with the best scoring cards play
+                        kb_score, trump_player = calculate_kinback_scheme(player.cards, i)
+                        if kb_score > highest_score:
+                            highest_score = kb_score
+                            soloist = player
+                            trump = trump_player
 
                 if soloist is None:
                     # nobody can play a game with these cards -> deal again
@@ -822,15 +840,16 @@ class Env:
                     self.state_machine = GameStateMachine(GameStateStart(self.game))
                     self.state_machine.handle_action(StartGameAction())
 
-            self.state_machine.handle_action(BidCallAction(soloist, 18))
+            self.state_machine.handle_action(BidCallAction(soloist, bid))
             self.state_machine.handle_action(
-                BidPassAction(self.game.players[(soloist.get_id() + 1) % 3], 18))  # id starts at 0
-            self.state_machine.handle_action(BidPassAction(self.game.players[(soloist.get_id() + 2) % 3], 18))
+                BidPassAction(self.game.players[(soloist.get_id() + 1) % 3], bid))  # id starts at 0
+            self.state_machine.handle_action(BidPassAction(self.game.players[(soloist.get_id() + 2) % 3], bid))
 
-            self.trump_enc = get_trump_enc(trump)
+            self.trump_enc = [0, 0, 0, 0] if trump in NULL_GAMES else get_trump_enc(trump)
 
             # matadors are counted with the Skat
-            self.game.game_variant = get_game_variant(self.trump_enc, soloist.cards + self.game.skat, hand=self.hand)
+            self.game.game_variant = get_game_variant(self.trump_enc, soloist.cards + self.game.skat, hand=self.hand,
+                                                      ouvert=trump in (46, 59))
 
             if not self.hand:
                 self.state_machine.handle_action(PickUpSkatAction(soloist))
@@ -853,7 +872,8 @@ class Env:
                     # initialise positions of defender as -1
                     self.pos_p[current_player_id][(current_player_id + 1) % 3], self.pos_p[current_player_id][
                         (current_player_id + 2) % 3] = -1, -1
-                    put_card = [1]
+                    # in hand games, the declarer does not put the Skat
+                    put_card = [0] if self.hand else [1]
                 elif self.game.get_declarer().get_id() == (current_player_id + 1) % 3:
                     self.pos_p[current_player_id][(current_player_id + 1) % 3] = -1
                     self.pos_p[current_player_id][(current_player_id + 2) % 3] = 1
@@ -863,9 +883,6 @@ class Env:
                     self.pos_p[current_player_id][(current_player_id + 2) % 3] = -1
                     put_card = [0]
 
-                level = [self.game.game_variant.get_level()]
-
-                # + level
                 game_states[current_player_id] = self.pos_p[current_player_id] + put_card + [0, 0] + self. \
                     trump_enc + last_trick + open_cards + get_hand_cards(self.game.players[current_player_id], self.enc)
 
@@ -902,8 +919,7 @@ class Env:
                     self.skat_put[1] = True
                     put_card = [1]
 
-                    self.game.game_variant = get_game_variant(
-                        self.trump_enc, self.game.get_declarer().cards + self.game.skat, hand=True)
+                    self.game.game_variant.hand = True
 
                     self.state_machine.handle_action(
                         DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))

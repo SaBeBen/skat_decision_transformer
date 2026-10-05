@@ -132,3 +132,29 @@ def test_reward_conventions():
     # the thesis rewards the put Skat a second time in the first trick
     assert thesis[2] - default[2] == put_points
     assert np.array_equal(default[3:11], thesis[3:11])
+
+
+@pytest.mark.parametrize("game,hand", [(24, False), (23, False), (35, True), (12, True), (59, True)])
+def test_declared_variants(game, hand):
+    from online.agents import RandomAgent
+    from online.self_play import play_game, compute_target_returns
+    from dt_skat_environment.game_engine.game.game_variant import GameVariantNull, GameVariantGrand
+
+    for seed in range(10):
+        random.seed(seed)
+        env = Env("one-hot")
+        states = env.online_reset(declaration=lambda e: {"declarer": seed % 3, "game": game, "hand": hand, "bid": 18})
+        declarer = seed % 3
+        assert env.game.get_declarer().get_id() == declarer
+        assert env.hand == hand
+        assert states[declarer][3] == (0 if hand else 1)
+        if game in (23, 35, 59):
+            assert isinstance(env.game.game_variant, GameVariantNull) and sum(env.trump_enc) == 0
+        elif game == 24:
+            assert type(env.game.game_variant) is GameVariantGrand and sum(env.trump_enc) == 4
+
+        agents = [RandomAgent(np.random.default_rng(seed + pl)) for pl in range(3)]
+        result = play_game(env, agents, states, compute_target_returns(env, True))
+        skat_points = sum(card.get_value() for card in env.game.skat)
+        assert sum(p.sum_trick_values() for p in env.game.players) + skat_points == 120
+        assert result["game_points"][declarer] != 0

@@ -98,7 +98,9 @@ def run_training(args):
             point_rewards=point_rewards,
             perspective=perspective,
             card_enc=hand_encoding,
-            reward_convention=args['reward_convention'])
+            reward_convention=args['reward_convention'],
+            include_grand=args['include_grand'],
+            include_null=args['include_null'])
 
         data_frame = pd.DataFrame(data)
         if data_frame.shape[0] == 1:
@@ -661,6 +663,8 @@ if __name__ == '__main__':
     parser.add_argument('--reward_convention', type=str, default='default', choices=['default', 'thesis'],
                         help='"thesis" reproduces the rewards of the thesis (the put Skat is rewarded twice). '
                              'Use it to evaluate the models trained in the thesis.')
+    parser.add_argument('--include_grand', type=str2bool, default=True, help='Whether to include grand games.')
+    parser.add_argument('--include_null', type=str2bool, default=True, help='Whether to include null games.')
     parser.add_argument('--hand_encoding', '-enc', type=str, default='one-hot',
                         choices=['mixed', 'mixed_comp', 'one-hot', 'one-hot_comp'],
                         help='The encoding of cards in the state.')

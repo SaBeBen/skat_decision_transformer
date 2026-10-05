@@ -30,6 +30,9 @@ The training can be reproduced with the following command:
 python experiments.py --championship "wc" --games 0 10000
 ````
 
+By default, suit, grand and null games are used. The thesis only trained on suit games, which corresponds to
+`--include_grand False --include_null False --reward_convention thesis`.
+
 For more information about the options:
 
 ````shell
