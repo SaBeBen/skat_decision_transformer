@@ -9,13 +9,15 @@ Games in the online environment with one (possibly different) agent per seat.
   the ones seen in training.
 """
 
+from collections import defaultdict
 from typing import List, Optional
 
 import numpy as np
 import torch
 
 from dt_skat_environment.environment import Env, ACT_DIM, MAX_EPISODE_LENGTH, hidden_card_labels
-from online.agents import as_agent
+from online.agents import as_agent, DTAgent
+from trainer.inference import get_action_batch
 
 REWARD_CONVENTIONS = ("default", "thesis")
 
@@ -92,34 +94,12 @@ def select_card(action_probs,
     return int(rng.choice(ACT_DIM, p=probs)), mismatch
 
 
-def play_game(env: Env,
-              seat_agents: list,
-              first_states: np.ndarray,
-              target_returns: List[float],
-              greedy: bool = False,
-              temperature: float = 1.0,
-              rng: Optional[np.random.Generator] = None,
-              reward_convention: str = "default") -> dict:
+def _game(env: Env, seat_agents: list, first_states: np.ndarray, target_returns: List[float],
+          reward_convention: str):
     """
-    Plays one game in an environment that was reset with env.online_reset.
-
-    :param env: the environment after online_reset.
-    :param seat_agents: one agent or TrainableDT per seat (the same one can sit on several seats).
-    :param first_states: the states returned by online_reset.
-    :param target_returns: the initial return-to-go of each seat.
-    :param greedy: whether to take the most probable card (evaluation) or sample (exploration).
-    :param temperature: sampling temperature if not greedy.
-    :param rng: numpy random generator for sampling.
-    :param reward_convention: "default", or "thesis" to additionally reward the put Skat in the first trick.
-    :return: dict with the trajectory of each seat (states, actions, rewards in the convention of the offline data),
-        the game points of each seat, the id of the declarer and the number of decisions where the rule mask of the
-        model disagreed with the game engine.
+    The course of one game as a coroutine: it yields a request for every decision (see play_games) and receives the
+    index of the selected card.
     """
-    if reward_convention not in REWARD_CONVENTIONS:
-        raise ValueError(f"Unknown reward convention {reward_convention}")
-
-    seat_agents = [as_agent(agent) for agent in seat_agents]
-    state_dim = env.state_dim
     declarer_id = env.game.get_declarer().get_id()
 
     states = [[np.asarray(first_states[pl], dtype=np.float32)] for pl in range(3)]
@@ -129,22 +109,16 @@ def play_game(env: Env,
     legal_masks = [[] for _ in range(3)]
     hidden_labels = [[] for _ in range(3)]
 
-    mismatches, decisions = 0, 0
     put_card_points = 0
 
-    def decide(player_id, t):
-        nonlocal mismatches, decisions
+    def request(player_id, t):
         legal = env.legal_actions(player_id)
         legal_masks[player_id][-1] = legal
         hidden_labels[player_id][-1] = hidden_card_labels(env.game, env.game.players[player_id], env.hand)
-        agent = seat_agents[player_id]
         trajectory = {"states": states[player_id], "actions": actions[player_id], "rewards": rewards[player_id],
                       "rtg": rtg[player_id], "legal": legal_masks[player_id]}
-        probs = agent.action_probs(env, player_id, trajectory, t)
-        card_index, mismatch = select_card(probs, legal, greedy or agent.deterministic, temperature, rng)
-        mismatches += mismatch
-        decisions += 1
-        return card_index
+        return {"env": env, "agent": seat_agents[player_id], "player_id": player_id, "trajectory": trajectory, "t": t,
+                "legal": legal}
 
     for t in range(MAX_EPISODE_LENGTH):
         for pl in range(3):
@@ -167,7 +141,7 @@ def play_game(env: Env,
 
             card_index = -1
             if env.legal_actions(declarer_id).any():
-                card_index = decide(declarer_id, t)
+                card_index = yield request(declarer_id, t)
 
                 # the declarer receives the card points of the put card
                 put_value = env.game.players[declarer_id].cards[card_index].get_value()
@@ -185,7 +159,7 @@ def play_game(env: Env,
                 states[current_player][-1] = env.update_state(
                     torch.from_numpy(states[current_player][-1])).numpy()
 
-                card_index = decide(current_player, t)
+                card_index = yield request(current_player, t)
                 actions[current_player][-1][card_index] = 1
 
                 acting_player = current_player
@@ -220,7 +194,7 @@ def play_game(env: Env,
             rewards[pl][-1] = 0.9 * 40 + rewards[pl][-1] * 0.1
 
     trajectories = [{
-        "states": np.stack(states[pl][:MAX_EPISODE_LENGTH]).reshape(MAX_EPISODE_LENGTH, state_dim),
+        "states": np.stack(states[pl][:MAX_EPISODE_LENGTH]).reshape(MAX_EPISODE_LENGTH, env.state_dim),
         "actions": np.stack(actions[pl]),
         "rewards": np.asarray(rewards[pl], dtype=np.float32),
         "legal": np.stack(legal_masks[pl]),
@@ -232,6 +206,94 @@ def play_game(env: Env,
         "game_points": game_points,
         "declarer_id": declarer_id,
         "declarer_won": declarer_won,
-        "mask_mismatches": mismatches,
-        "decisions": decisions,
     }
+
+
+def play_games(envs: List[Env],
+               seat_agents: list,
+               first_states: list,
+               target_returns: list,
+               greedy: bool = False,
+               temperature: float = 1.0,
+               rng: Optional[np.random.Generator] = None,
+               reward_convention: str = "default") -> List[dict]:
+    """
+    Plays several games in lockstep. In every step, the decisions of all games that are made by the same Decision
+    Transformer are predicted in one batch, which is much faster than playing the games one after another.
+
+    :param envs: environments after online_reset.
+    :param seat_agents: for every game, one agent or TrainableDT per seat.
+    :param first_states: for every game, the states returned by online_reset.
+    :param target_returns: for every game, the initial return-to-go of each seat.
+    :param greedy: whether to take the most probable card (evaluation) or sample (exploration).
+    :param temperature: sampling temperature if not greedy.
+    :param rng: numpy random generator for sampling.
+    :param reward_convention: "default", or "thesis" to additionally reward the put Skat in the first trick.
+    :return: for every game a dict with the trajectory of each seat (states, actions, rewards in the convention of the
+        offline data, legal actions and locations of the unseen cards), the game points of each seat, the id of the
+        declarer and the number of decisions where the rule mask of the model disagreed with the game engine.
+    """
+    if reward_convention not in REWARD_CONVENTIONS:
+        raise ValueError(f"Unknown reward convention {reward_convention}")
+
+    games = [_game(env, [as_agent(agent) for agent in agents], states, targets, reward_convention)
+             for env, agents, states, targets in zip(envs, seat_agents, first_states, target_returns)]
+    results = [None] * len(games)
+    mismatches, decisions = [0] * len(games), [0] * len(games)
+
+    active = {}
+    for i, game in enumerate(games):
+        try:
+            active[i] = next(game)
+        except StopIteration as stop:
+            results[i] = stop.value
+
+    while active:
+        # batch the requests of the same Decision Transformer
+        probs = {}
+        batches = defaultdict(list)
+        for i, req in active.items():
+            if isinstance(req["agent"], DTAgent):
+                batches[id(req["agent"].model)].append(i)
+            else:
+                probs[i] = req["agent"].action_probs(req["env"], req["player_id"], req["trajectory"], req["t"])
+        for indices in batches.values():
+            model = active[indices[0]]["agent"].model
+            batch_probs = get_action_batch(model, [active[i]["trajectory"] for i in indices],
+                                           [active[i]["t"] for i in indices])
+            for i, p in zip(indices, batch_probs):
+                probs[i] = p
+
+        for i in list(active):
+            req = active[i]
+            card_index, mismatch = select_card(probs[i], req["legal"], greedy or req["agent"].deterministic,
+                                               temperature, rng)
+            mismatches[i] += mismatch
+            decisions[i] += 1
+            try:
+                active[i] = games[i].send(card_index)
+            except StopIteration as stop:
+                results[i] = stop.value
+                del active[i]
+
+    for i, result in enumerate(results):
+        result["mask_mismatches"] = mismatches[i]
+        result["decisions"] = decisions[i]
+    return results
+
+
+def play_game(env: Env,
+              seat_agents: list,
+              first_states: np.ndarray,
+              target_returns: List[float],
+              greedy: bool = False,
+              temperature: float = 1.0,
+              rng: Optional[np.random.Generator] = None,
+              reward_convention: str = "default") -> dict:
+    """
+    Plays one game in an environment that was reset with env.online_reset (see play_games).
+
+    :param seat_agents: one agent or TrainableDT per seat (the same one can sit on several seats).
+    """
+    return play_games([env], [seat_agents], [first_states], [target_returns], greedy, temperature, rng,
+                      reward_convention)[0]

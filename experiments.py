@@ -32,7 +32,7 @@ from trainer.declaration import DeclarationDT, DeclarationPolicy, declarations_f
 from trainer.return_model import ReturnModel, train_return_model, rtg_targets
 from online.replay_buffer import trajectories_from_data
 from online.agents import HumanAgent, RandomAgent
-from online.self_play import play_game, compute_target_returns
+from online.self_play import play_game, play_games, compute_target_returns
 from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
 
 
@@ -423,7 +423,9 @@ def run_online_eval(args):
         games_indices=games_to_load,
         point_rewards=point_rewards,
         perspective=perspective,
-        card_enc=hand_encoding)
+        card_enc=hand_encoding,
+        include_grand=args['include_grand'],
+        include_null=args['include_null'])
 
     pretrained_model.config.state_dim = state_dim
 
@@ -472,16 +474,21 @@ def eval_three_agents(model, point_reward, card_enc, game_idx,
     wins_declarer_ai = 0
     wins_defender_ai = 0
 
-    for j in tqdm(range(game_idx.stop - game_idx.start)):
+    envs, first_states, targets = [], [], []
+    for j in range(game_idx.stop - game_idx.start):
         env = Env(card_enc)
 
         games_idx = slice(3 * j, 3 * j + 3)
         # build the environment for the evaluation by passing every perspective
-        states = env.online_reset(meta_and_cards[j], first_game_states[games_idx])
+        first_states.append(env.online_reset(meta_and_cards[j], first_game_states[games_idx]))
+        targets.append(compute_target_returns(env, point_reward, scale, [model] * 3))
+        envs.append(env)
 
-        result = play_game(env, [model] * 3, states, compute_target_returns(env, point_reward, scale, [model] * 3),
-                           greedy=True, reward_convention=reward_convention)
+    # the games are played in lockstep with batched predictions
+    results = play_games(envs, [[model] * 3] * len(envs), first_states, targets, greedy=True,
+                         reward_convention=reward_convention)
 
+    for j, result in enumerate(tqdm(results)):
         achieved_points_in_data = meta_and_cards[j][-5]
 
         for current_player in range(3):

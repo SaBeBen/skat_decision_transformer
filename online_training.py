@@ -30,7 +30,7 @@ from online.agents import RuleAgent
 from online.evaluation import duplicate_evaluation
 from online.odt import ODTUpdater
 from online.replay_buffer import TrajectoryReplayBuffer
-from online.self_play import play_game, compute_target_returns
+from online.self_play import play_games, compute_target_returns
 from trainer.data_collator import DecisionTransformerSkatDataCollator
 from trainer.dt_trainer import load_trainable_dt
 from trainer.declaration import DeclarationDT, DeclarationPolicy
@@ -110,13 +110,15 @@ def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=N
     stats = {"declarer_points": [], "declarer_won": [], "learner_declarer_points": [], "learner_defender_won": [],
              "mask_mismatches": 0, "decisions": 0, "filtered": 0}
 
+    envs, seats, first_states, targets, learner_seats, opponent_seats, choices = [], [], [], [], [], [], []
     for _ in range(n_games):
         # seeded deals for reproducibility, disjoint from the evaluation seeds
         random.seed(args["seed"] * 1_000_003 + game_counter)
         game_counter += 1
 
         env = Env(CARD_ENC)
-        first_states = env.online_reset(point_rewards=args["point_rewards"], declaration=declaration)
+        first_states.append(env.online_reset(point_rewards=args["point_rewards"], declaration=declaration))
+        choices.append(list(declaration.last_choices) if declaration is not None else None)
 
         is_learner = rng.random(3) < args["learner_seat_prob"]
         if not is_learner.any():
@@ -124,11 +126,17 @@ def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=N
         opponents = {pl: pool.sample(rng) for pl in range(3) if not is_learner[pl]}
         seat_models = [learner if is_learner[pl] else pool.opponents[opponents[pl]] for pl in range(3)]
 
-        result = play_game(env, seat_models, first_states,
-                           compute_target_returns(env, args["point_rewards"], args["rtg_scale"], seat_models),
-                           greedy=False, temperature=args["temperature"], rng=rng,
-                           reward_convention=args["reward_convention"])
+        envs.append(env)
+        seats.append(seat_models)
+        targets.append(compute_target_returns(env, args["point_rewards"], args["rtg_scale"], seat_models))
+        learner_seats.append(is_learner)
+        opponent_seats.append(opponents)
 
+    # all games are played in lockstep with batched predictions
+    results = play_games(envs, seats, first_states, targets, greedy=False, temperature=args["temperature"], rng=rng,
+                         reward_convention=args["reward_convention"])
+
+    for result, is_learner, opponents, game_choices in zip(results, learner_seats, opponent_seats, choices):
         declarer_id = result["declarer_id"]
         for pl in range(3):
             if not is_learner[pl]:
@@ -149,10 +157,10 @@ def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=N
                 if (pl == declarer_id) != learner_is_declarer:
                     pool.update(index, learner_won)
 
-        if declaration is not None and declaration_examples is not None:
+        if game_choices is not None and declaration_examples is not None:
             # hindsight: the declaration of each seat is labelled with the points it achieved
             declaration_examples += [(state, index, result["game_points"][pl])
-                                     for pl, (state, index) in enumerate(declaration.last_choices)]
+                                     for pl, (state, index) in enumerate(game_choices)]
 
         stats["declarer_points"].append(result["game_points"][declarer_id])
         stats["declarer_won"].append(result["declarer_won"])

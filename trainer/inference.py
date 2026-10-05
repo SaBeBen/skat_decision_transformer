@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 from dt_skat_environment.environment import ACT_DIM
@@ -45,3 +46,46 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps, action
         action_mask=action_mask,
     )
     return action_preds[0, -1].cpu()
+
+
+@torch.no_grad()
+def get_action_batch(model, trajectories, timesteps):
+    """
+    Action probabilities for the current time step of several trajectories in one forward pass.
+
+    :param trajectories: dicts with the lists "states", "actions", "rtg" and "legal" up to (at least) the time step.
+    :param timesteps: the current time step of every trajectory.
+    :return: array (batch, ACT_DIM) of action probabilities.
+    """
+    max_len = model.config.max_ep_len
+    batch_size = len(trajectories)
+    states = np.zeros((batch_size, max_len, model.config.state_dim), dtype=np.float32)
+    actions = np.zeros((batch_size, max_len, ACT_DIM), dtype=np.float32)
+    returns_to_go = np.zeros((batch_size, max_len, 1), dtype=np.float32)
+    steps = np.zeros((batch_size, max_len), dtype=np.int64)
+    attention_mask = np.zeros((batch_size, max_len), dtype=np.int64)
+    action_mask = np.zeros((batch_size, max_len, ACT_DIM), dtype=np.float32)
+
+    for b, (trajectory, t) in enumerate(zip(trajectories, timesteps)):
+        # left padding as in get_action
+        length = min(t + 1, max_len)
+        first = t + 1 - length
+        states[b, -length:] = np.asarray(trajectory["states"][first:t + 1], dtype=np.float32)
+        actions[b, -length:] = np.asarray(trajectory["actions"][first:t + 1], dtype=np.float32)
+        returns_to_go[b, -length:, 0] = np.asarray(trajectory["rtg"][first:t + 1], dtype=np.float32)
+        steps[b, -length:] = np.arange(first, t + 1)
+        attention_mask[b, -length:] = 1
+        action_mask[b, -length:] = np.asarray(trajectory["legal"][first:t + 1], dtype=np.float32)
+
+    device = model.device
+    _, action_preds, _ = model.original_forward(
+        states=torch.from_numpy(states).to(device),
+        actions=torch.from_numpy(actions).to(device),
+        rewards=None,
+        returns_to_go=torch.from_numpy(returns_to_go).to(device),
+        timesteps=torch.from_numpy(steps).to(device),
+        attention_mask=torch.from_numpy(attention_mask).to(device),
+        return_dict=False,
+        action_mask=torch.from_numpy(action_mask).to(device),
+    )
+    return action_preds[:, -1].cpu().numpy()

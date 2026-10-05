@@ -59,3 +59,33 @@ def test_online_training_smoke(tmp_path):
     assert any(not torch.equal(a, b) for a, b in zip(reloaded.state_dict().values(),
                                                      pretrained.state_dict().values()))
     assert glob.glob(str(tmp_path / "logs" / "*" / "events.out.tfevents.*"))
+
+
+def test_batched_games_equal_single_games():
+    import random
+    from dt_skat_environment.environment import Env
+    from online.self_play import play_game, play_games, compute_target_returns
+
+    model = TrainableDT.from_pretrained(sorted(glob.glob("pretrained_models/games_*"))[-1], use_mask=True,
+                                        use_safetensors=True).eval()
+
+    def deals():
+        envs, states, targets = [], [], []
+        for seed in range(6):
+            random.seed(seed)
+            env = Env("one-hot")
+            states.append(env.online_reset())
+            envs.append(env)
+            targets.append(compute_target_returns(env, True, 0.7))
+        return envs, states, targets
+
+    envs, states, targets = deals()
+    single = [play_game(env, [model] * 3, s, tr, greedy=True) for env, s, tr in zip(envs, states, targets)]
+    envs, states, targets = deals()
+    batched = play_games(envs, [[model] * 3] * 6, states, targets, greedy=True)
+
+    for a, b in zip(single, batched):
+        assert a["game_points"] == b["game_points"]
+        for ta, tb in zip(a["trajectories"], b["trajectories"]):
+            np.testing.assert_array_equal(ta["actions"], tb["actions"])
+            np.testing.assert_allclose(ta["rewards"], tb["rewards"])

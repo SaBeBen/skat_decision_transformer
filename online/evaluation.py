@@ -4,18 +4,21 @@ from typing import Dict
 import numpy as np
 
 from dt_skat_environment.environment import Env
-from online.self_play import play_game, compute_target_returns
+from online.self_play import play_games, compute_target_returns
 
 
-def _play_deal(seed, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention, declaration):
-    # the same seed gives the same deal and declarer (Kinback scheme and greedy bidding are deterministic)
-    random.seed(seed)
-    env = Env(card_enc)
-    first_states = env.online_reset(point_rewards=point_rewards, declaration=declaration)
-    seat_models = seat_models_fn(env.game.get_declarer().get_id())
-    return play_game(env, seat_models, first_states,
-                     compute_target_returns(env, point_rewards, rtg_scale, seat_models), greedy=True,
-                     reward_convention=reward_convention)
+def _play_deals(seeds, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention, declaration):
+    envs, seats, first_states, targets = [], [], [], []
+    for seed in seeds:
+        # the same seed gives the same deal and declarer (Kinback scheme and greedy bidding are deterministic)
+        random.seed(seed)
+        env = Env(card_enc)
+        first_states.append(env.online_reset(point_rewards=point_rewards, declaration=declaration))
+        seat_models = seat_models_fn(env.game.get_declarer().get_id())
+        envs.append(env)
+        seats.append(seat_models)
+        targets.append(compute_target_returns(env, point_rewards, rtg_scale, seat_models))
+    return play_games(envs, seats, first_states, targets, greedy=True, reward_convention=reward_convention)
 
 
 def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_007, point_rewards: bool = True,
@@ -43,10 +46,9 @@ def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_
         "learner_defenders": lambda declarer: [baseline if pl == declarer else learner for pl in range(3)],
     }
 
-    for i in range(n_games):
-        for name, seat_models_fn in configurations.items():
-            result = _play_deal(seed + i, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention,
-                                declaration)
+    for name, seat_models_fn in configurations.items():
+        for result in _play_deals(range(seed, seed + n_games), seat_models_fn, point_rewards, rtg_scale, card_enc,
+                                  reward_convention, declaration):
             declarer_points[name].append(result["game_points"][result["declarer_id"]])
             declarer_won[name].append(result["declarer_won"])
 
