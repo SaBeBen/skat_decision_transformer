@@ -41,6 +41,13 @@ class GameVariant(ABC):
     def get_variant_name(self):
         raise NotImplementedError()
 
+    def effective_suit(self, card):
+        # trumps form an own suit, all other cards belong to their printed suit
+        return "trump" if self.is_trump(card) else card.suit
+
+    def follows_suit(self, card, led_card):
+        return self.effective_suit(card) == self.effective_suit(led_card)
+
     def get_highest_card(self, cards):
         highest_card = None
         for card in cards:
@@ -55,8 +62,10 @@ class GameVariant(ABC):
 # ------------------------------------------------------------
 class GameVariantGrand(GameVariant):
 
-    # def __init__(self, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
-    #     super().__init__(hand=hand, schneider_called=schneider_called, schwarz_called=schwarz_called, ouvert=ouvert)
+    def __init__(self, peaks=1, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
+        super().__init__(hand=hand, schneider_called=schneider_called, schwarz_called=schwarz_called, ouvert=ouvert)
+        # number of matadors "with" or "without"
+        self.peaks = peaks
 
     def compare_jacks(self, jack_higher, jack_lower):
         if jack_higher.face is not Card.Face.JACK:
@@ -101,7 +110,7 @@ class GameVariantGrand(GameVariant):
         return 24
 
     def get_level(self):
-        return self.ouvert + self.schwarz_called + self.scheider_called + self.hand
+        return self.peaks + self.ouvert + self.schwarz_called + self.scheider_called + self.hand
 
     def get_variant_name(self):
         return "Grand"
@@ -119,8 +128,8 @@ class GameVariantGrand(GameVariant):
 class GameVariantSuit(GameVariantGrand):
     def __init__(self, trump_suit, peaks=1, hand=False, schneider_called=False, schwarz_called=False, ouvert=False):
         # expects trump suit
-        super().__init__(hand=hand, schneider_called=schneider_called, schwarz_called=schwarz_called, ouvert=ouvert)
-        self.peaks = peaks
+        super().__init__(peaks=peaks, hand=hand, schneider_called=schneider_called, schwarz_called=schwarz_called,
+                         ouvert=ouvert)
         self.trump_suit = trump_suit
 
     def compare_cards(self, card_higher, card_lower):
@@ -140,9 +149,6 @@ class GameVariantSuit(GameVariantGrand):
     def get_trump(self):
         return self.trump_suit
 
-    def get_level(self):
-        return self.peaks + self.ouvert + self.schwarz_called + self.scheider_called + self.hand
-
     def get_variant_name(self):
         return self.trump_suit.name
 
@@ -152,10 +158,15 @@ class GameVariantSuit(GameVariantGrand):
 # Concrete game variant class for null game
 # ------------------------------------------------------------
 class GameVariantNull(GameVariant):
+    # order of the faces in a null game: 7, 8, 9, 10, J, Q, K, A
+    NULL_ORDER = [Card.Face.SEVEN, Card.Face.EIGHT, Card.Face.NINE, Card.Face.TEN, Card.Face.JACK, Card.Face.QUEEN,
+                  Card.Face.KING, Card.Face.ACE]
+
     def __init__(self, hand=False, ouvert=False):
-        super().__init__(hand=hand, ouvert=ouvert)
-        # self.hand = hand
-        # self.ouvert = ouvert
+        GameVariant.__init__(self, hand=hand, ouvert=ouvert)
+        # schneider and schwarz do not exist in null games
+        self.scheider_called = False
+        self.schwarz_called = False
 
     def compare_jacks(self, jack_higher, jack_lower):
         if jack_higher.face is not Card.Face.JACK:
@@ -166,12 +177,28 @@ class GameVariantNull(GameVariant):
         return 0
 
     def compare_cards(self, card_higher, card_lower):
-        if card_higher.face.value > card_lower.face.value:
+        # there are no trumps, only cards of the same suit can be compared
+        if card_higher.suit is not card_lower.suit:
+            return 0
+        rank_higher = self.NULL_ORDER.index(card_higher.face)
+        rank_lower = self.NULL_ORDER.index(card_lower.face)
+        if rank_higher > rank_lower:
             return 1
-        elif card_higher.face.value < card_lower.face.value:
+        elif rank_higher < rank_lower:
             return -1
         else:
             return 0
+
+    def get_value(self):
+        if self.hand:
+            return 59 if self.ouvert else 35
+        return 46 if self.ouvert else 23
+
+    def has_called_schneider(self):
+        return False
+
+    def has_called_schwarz(self):
+        return False
 
     def is_trump(self, card):
         return False

@@ -71,7 +71,8 @@ class Game:
     def has_declarer_won(self, skat_points):
         # check overbid and bid variants
         if isinstance(self.game_variant, GameVariantNull):
-            return self.get_declarer().sum_trick_values() == 0
+            # the declarer must not win a single trick, even without card points
+            return len(self.get_declarer().trick_stack) == 0
         if self.game_variant.has_called_schwarz():
             return self.get_declarer().sum_trick_values() + skat_points == 120
         elif self.game_variant.has_called_schneider():
@@ -122,7 +123,7 @@ class Game:
         # calculate the remaining card points of the game
         remaining_points = (120 - sum([player.sum_trick_values() for player in self.players]))
 
-        if current_player is Player.Type.DECLARER:
+        if current_player.type is Player.Type.DECLARER:
             # if the declarer surrenders...
             # ...the declarer receives no reward...
             current_player.current_trick_points = 0
@@ -181,14 +182,10 @@ class Trick:
             return True
 
         first_card = self.stack[0][1]
-        # check if player can follow by trump
-        if game_variant.is_trump(first_card) and game_variant.has_trump(player):
-            return game_variant.is_trump(card)
-        # check if player can follow by suit if no trump was played
-        elif not game_variant.is_trump(first_card) and player.has_suit(first_card.suit):
-            return card.suit is first_card.suit
-        else:
-            return True
+        # the player has to follow the led suit (trumps count as one suit, jacks are trumps except in null games)
+        if any(game_variant.follows_suit(hand_card, first_card) for hand_card in player.cards):
+            return game_variant.follows_suit(card, first_card)
+        return True
 
     def is_empty(self):
         return len(self.stack) == 0

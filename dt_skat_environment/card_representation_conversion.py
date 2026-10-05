@@ -29,8 +29,8 @@ def convert_tuple_to_card(card):
         (0, 0, 0, 1, 3): Card(Card.Suit.CLUB, Card.Face.NINE),  # 9♣
         (0, 0, 0, 1, 2): Card(Card.Suit.CLUB, Card.Face.EIGHT),  # 8♣
         (0, 0, 0, 1, 1): Card(Card.Suit.CLUB, Card.Face.SEVEN),  # 7♣
-        (0, 0, 0, 1, 7): Card(Card.Suit.SPADE, Card.Face.ACE),  # A♠
-        (0, 0, 0, 1, 5): Card(Card.Suit.SPADE, Card.Face.KING),  # K♠
+        (0, 0, 1, 0, 7): Card(Card.Suit.SPADE, Card.Face.ACE),  # A♠
+        (0, 0, 1, 0, 5): Card(Card.Suit.SPADE, Card.Face.KING),  # K♠
         (0, 0, 1, 0, 4): Card(Card.Suit.SPADE, Card.Face.QUEEN),  # Q♠
         (0, 0, 1, 0, 8): Card(Card.Suit.SPADE, Card.Face.JACK),  # J♠
         (0, 0, 1, 0, 6): Card(Card.Suit.SPADE, Card.Face.TEN),  # 10♠
@@ -522,8 +522,8 @@ all_cards = [
     [0, 0, 0, 1, 3],  # 9♣
     [0, 0, 0, 1, 2],  # 8♣
     [0, 0, 0, 1, 1],  # 7♣
-    [0, 0, 0, 1, 7],  # A♠
-    [0, 0, 0, 1, 5],  # K♠
+    [0, 0, 1, 0, 7],  # A♠
+    [0, 0, 1, 0, 5],  # K♠
     [0, 0, 1, 0, 4],  # Q♠
     [0, 0, 1, 0, 8],  # J♠
     [0, 0, 1, 0, 6],  # 10♠

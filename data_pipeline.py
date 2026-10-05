@@ -176,16 +176,14 @@ def get_states_actions_rewards(
     skip = False
     # return the ids of the corrupted games
     card_error_games = []
+    error_indices = []
 
     for game in tqdm(meta_and_cards):
 
         for i in perspective:
 
             if skip:
-                # handling of malicious logging in data
-                skip = False
-                print(f"broke out of game {game[0]} at cs_index {cs_index}")
-                card_error_games.append(game[0])
+                # an illegal move was logged in the data, the remaining perspectives of this game are not needed
                 break
 
             env = Env(enc=card_enc)
@@ -316,7 +314,7 @@ def get_states_actions_rewards(
                     actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                     # insert rewards
                     rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
-                    break
+                    continue
 
                 env.game.get_declarer().cards.sort()
 
@@ -354,7 +352,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
-                        break
+                        continue
 
                     try:
                         # put down first Skat card in the environment
@@ -374,7 +372,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
-                        break
+                        continue
 
                     # the soloist knows how many points he possesses through the Skat,
                     # defenders do not have this information
@@ -407,7 +405,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
-                        break
+                        continue
 
                     try:
                         # put down second Skat card in the environment
@@ -427,7 +425,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
-                        break
+                        continue
 
                     # the soloist knows how many points he possesses through the Skat,
                     # defenders do not have this information
@@ -471,7 +469,7 @@ def get_states_actions_rewards(
                         actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                         # insert rewards
                         rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
-                        break
+                        continue
             else:
                 # if the game is surrendered instantly
                 if surrendered_card == 0:
@@ -486,7 +484,7 @@ def get_states_actions_rewards(
                     actions_table[3 * cs_index + i] = np.array(actions, dtype=np.uint8)
                     # insert rewards
                     rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
-                    break
+                    continue
 
                 # if hand is played, show to not put a card
                 put_card = [0]
@@ -642,7 +640,7 @@ def get_states_actions_rewards(
                     skat_and_cs[cs_index, 3 * trick + 1], encoding=card_enc)
 
                 # check if game was surrendered at this card
-                if surrendered_card == (trick * 3 + 3):
+                if surrendered_card == (trick * 3):
                     game_state, actions, rewards = \
                         env.surrender(won, current_player, soloist_points, trick, game_state, actions, rewards,
                                       state_dim)
@@ -693,7 +691,23 @@ def get_states_actions_rewards(
             # insert rewards
             rewards_table[3 * cs_index + i] = np.array([[i] for i in rewards], dtype=np.int16)
 
+        if skip:
+            # handling of malicious logging in data: the whole game is removed below
+            skip = False
+            print(f"Illegal move in game {game[0]} at cs_index {cs_index}, the game is left out")
+            card_error_games.append(game[0])
+            error_indices.append(cs_index)
+
         cs_index = cs_index + 1
+
+    if error_indices:
+        keep_games = [g for g in range(amount_games) if g not in error_indices]
+        keep_rows = [len_p * g + j for g in keep_games for j in range(len_p)]
+        game_state_table = [game_state_table[k] for k in keep_rows]
+        actions_table = [actions_table[k] for k in keep_rows]
+        rewards_table = [rewards_table[k] for k in keep_rows]
+        meta_and_cards = meta_and_cards[keep_games]
+        skat_and_cs = skat_and_cs[keep_games]
 
     first_states = [game_state_table[i][0] for i in range(len(game_state_table))]
     # first_states = None

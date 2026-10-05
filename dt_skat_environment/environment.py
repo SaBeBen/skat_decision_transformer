@@ -1,4 +1,5 @@
-from typing import List, Tuple, Callable
+import math
+from typing import List, Tuple, Optional
 
 import numpy as np
 import torch
@@ -22,6 +23,9 @@ ACT_DIM = 12
 MAX_EPISODE_LENGTH = 12
 
 card_encodings = ["mixed_comp", "mixed", "one-hot_comp", "one-hot"]
+
+# encodings of null games in the data: null, null hand, null ouvert, null ouvert hand
+NULL_GAMES = (23, 35, 46, 59)
 
 
 def get_dims_in_enc(encoding: str) -> Tuple[int, int, int]:
@@ -55,75 +59,50 @@ def get_trump_enc(trump: int) -> List[int]:
             1 if trump == 11 or trump == 24 else 0, 1 if trump == 12 or trump == 24 else 0]
 
 
+# order of the matadors: the jacks, followed by the trump suit (only in suit games)
+JACK_ORDER = [Card.Suit.CLUB, Card.Suit.SPADE, Card.Suit.HEARTS, Card.Suit.DIAMOND]
+TRUMP_FACE_ORDER = [Card.Face.ACE, Card.Face.TEN, Card.Face.KING, Card.Face.QUEEN, Card.Face.NINE, Card.Face.EIGHT,
+                    Card.Face.SEVEN]
+
+
 def get_peaks(cards: List[Card],
-              trump: Card.Suit) -> int:
-    # first sort the cards to sort the peaks to the left of the hand
-    peak_sorting = merge_sort(cards, Card.gt_for_peaks, trump)
-    if peak_sorting[0].face == Card.Face.JACK and peak_sorting[0].suit == Card.Suit.CLUB:
-        row = 1
-        for i in range(1, 11):
-            # count the unbroken sequence of peaks
-            if peak_sorting[i].face == Card.Face.JACK and peak_sorting[i].face.value == (3 - row):
-                # count the Js in descending order
-                row += 1
-            elif peak_sorting[i].suit.value == trump and peak_sorting[i].face.value == (11 - row):
-                # count the trumps in descending order if all Js are on the hand
-                row += 1
-            else:
-                break
-    else:
-        if peak_sorting[0].face == Card.Face.JACK:
-            # if the J of clubs is missing, the first J tells the level
-            row = peak_sorting[0].face.value
-        else:
-            # if no J is there, the highest trump tells the value
-            row = 11 - peak_sorting[0].face.value
+              trump: Optional[Card.Suit]) -> int:
+    """
+    Number of matadors "with" or "without" of the declarer's cards (hand and Skat).
 
-    return row
+    :param cards: the cards of the declarer including the Skat.
+    :param trump: the trump suit in a suit game, None in a grand game (only jacks count).
+    """
+    order = [Card(suit, Card.Face.JACK) for suit in JACK_ORDER]
+    if trump is not None:
+        order += [Card(trump, face) for face in TRUMP_FACE_ORDER]
+
+    # "with" if the highest trump is on the hand, "without" otherwise
+    with_matadors = order[0] in cards
+    peaks = 0
+    for card in order:
+        if (card in cards) != with_matadors:
+            break
+        peaks += 1
+
+    return peaks
 
 
-# merge sort function to order the peaks to the left
-def merge_sort(cards: List,
-               peak_comp: Callable[[Card, Card, Card.Suit], bool],
-               trump: Card.Suit) -> List:
-    if len(cards) <= 1:
-        return cards
-
-    # Split the cards
-    mid = len(cards) // 2
-    left = cards[:mid]
-    right = cards[mid:]
-
-    # Sort recursively
-    left = merge_sort(left, peak_comp, trump)
-    right = merge_sort(right, peak_comp, trump)
-
-    merged = []
-    left_idx, right_idx = 0, 0
-
-    while left_idx < len(left) and right_idx < len(right):
-        # compare the cards
-        if peak_comp(left[left_idx], right[right_idx], trump_suit=trump):
-            merged.append(left[left_idx])
-            left_idx += 1
-        else:
-            merged.append(right[right_idx])
-            right_idx += 1
-
-    merged.extend(left[left_idx:])
-    merged.extend(right[right_idx:])
-
-    return merged
-
-
-def get_game_variant(trump_enc: List[int], cards: List[Card]) -> GameVariant:
+def get_game_variant(trump_enc: List[int], cards: List[Card], hand=False, schneider_called=False,
+                     schwarz_called=False, ouvert=False) -> GameVariant:
+    """
+    :param trump_enc: encoding of the game variant ([0,0,0,0] null, one-hot suit, [1,1,1,1] grand).
+    :param cards: the cards of the declarer including the Skat to count the matadors.
+    """
     if sum(trump_enc) == 1:
-        peaks = get_peaks(cards, Card.Suit(trump_enc.index(1)))
-        return GameVariantSuit(Card.Suit(trump_enc.index(1)), peaks)
+        suit = Card.Suit(trump_enc.index(1))
+        return GameVariantSuit(suit, peaks=get_peaks(cards, suit), hand=hand, schneider_called=schneider_called,
+                               schwarz_called=schwarz_called, ouvert=ouvert)
     elif sum(trump_enc) == 0:
-        return GameVariantNull()
+        return GameVariantNull(hand=hand, ouvert=ouvert)
     elif sum(trump_enc) > 1:
-        return GameVariantGrand()
+        return GameVariantGrand(peaks=get_peaks(cards, None), hand=hand, schneider_called=schneider_called,
+                                schwarz_called=schwarz_called, ouvert=ouvert)
     else:
         raise NotImplementedError(f"Game Variant with encoding {trump_enc} is not supported.")
 
@@ -320,6 +299,12 @@ def calculate_kinback_scheme(hand_cards: List[Card], pos: int) -> Tuple[int, int
     return highest_score, trump + 9
 
 
+def get_base_value(game_variant: GameVariant) -> int:
+    if isinstance(game_variant, GameVariantSuit):
+        return 9 + game_variant.trump_suit.value
+    return 24
+
+
 class Env:
     def __init__(self, enc):
 
@@ -382,10 +367,12 @@ class Env:
             # default behaviour (gives a negative reward here)
             rewards.append(current_player.current_trick_points)
 
-        # pad the states, actions and rewards with 0s
-        game_state += ([0] * state_dim) * (10 - trick)
-        actions = actions + [[0] * ACT_DIM] * (9 - trick)
-        rewards = rewards + [0] * (10 - trick)
+        # pad the states, actions and rewards with 0s to the length of a game
+        # (depending on when the game was surrendered, the current time step can be complete or not)
+        game_state = game_state[:MAX_EPISODE_LENGTH * state_dim]
+        game_state += [0] * (MAX_EPISODE_LENGTH * state_dim - len(game_state))
+        actions = actions[:MAX_EPISODE_LENGTH] + [[0] * ACT_DIM] * (MAX_EPISODE_LENGTH - len(actions))
+        rewards = rewards[:MAX_EPISODE_LENGTH] + [0] * (MAX_EPISODE_LENGTH - len(rewards))
 
         return game_state, actions, rewards
 
@@ -395,23 +382,20 @@ class Env:
                              schneider_called=False,
                              schwarz_called=False,
                              ouvert=False):
-        # declare the game variant
-        if trump == 0 or trump == 35 or trump == 46 or trump == 59:
-            # null
-            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(),
-                                                                      GameVariantNull(ouvert=ouvert)))
-        elif trump == 24:
-            # grand
-            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(),
-                                                                      GameVariantGrand(hand, schneider_called,
-                                                                                       schwarz_called, ouvert)))
+        """
+        Declares the game variant given in the encoding of the data (9-12 suit, 24 grand, 23/35/46/59 null).
+        """
+        if trump in NULL_GAMES:
+            trump_enc = [0, 0, 0, 0]
+            hand, ouvert = hand or trump in (35, 59), ouvert or trump in (46, 59)
         else:
-            # convert DB encoding to self encoding
-            suit = Card.Suit(trump - 9)
-            # announce game variant
-            self.state_machine.handle_action(DeclareGameVariantAction(self.game.get_declarer(),
-                                                                      GameVariantSuit(suit, hand, schneider_called,
-                                                                                      schwarz_called, ouvert)))
+            trump_enc = get_trump_enc(trump)
+
+        declarer = self.game.get_declarer()
+        game_variant = get_game_variant(trump_enc, declarer.cards + self.game.skat, hand=hand,
+                                        schneider_called=schneider_called, schwarz_called=schwarz_called,
+                                        ouvert=ouvert)
+        self.state_machine.handle_action(DeclareGameVariantAction(declarer, game_variant))
 
     def get_declarer_from_pos(self, pos_p: List[int]):
         # get the declarer of the data by using the pos_p encoding, e.g. (-1,0,1) for a defender in mid-hand
@@ -422,62 +406,59 @@ class Env:
             idx = pos_p.index(-1)
             return self.game.players[idx]
 
+    def get_game_value(self) -> int:
+        """The declared value of the game (without achieved schneider/schwarz)."""
+        game_variant = self.game.game_variant
+        if isinstance(game_variant, GameVariantNull):
+            return game_variant.get_value()
+        return get_base_value(game_variant) * (1 + game_variant.get_level())
+
     def get_game_points(self, current_player):
-        # Seeger-Fabian score
-        if sum(self.trump_enc) == 0:
-            # if null is played, the game_points are directly inferred
-            if self.game.game_variant.hand:
-                if self.game.game_variant.ouvert:
-                    return 59
-                else:
-                    return 35
-            elif self.game.game_variant.ouvert:
-                return 46
-            else:
-                return 23
+        """Seeger-Fabian score of a player in a game of three players."""
+        game_variant = self.game.game_variant
+        declarer = self.game.get_declarer()
+        skat_points = sum(card.get_value() for card in self.game.skat)
+        won = self.game.has_declarer_won(skat_points)
+
+        if isinstance(game_variant, GameVariantNull):
+            game_value = game_variant.get_value()
+            if self.game.bid_value > game_value:
+                # overbid
+                won = False
         else:
-            if sum(self.trump_enc) == 4:
-                # grand base value
-                base_value = 24
+            base_value = get_base_value(game_variant)
+            # 1 for game, get_level includes the matadors and announcements
+            level = 1 + game_variant.get_level()
+            card_points = declarer.sum_trick_values() + skat_points
+            declarer_tricks = len(declarer.trick_stack)
+
+            if won:
+                if card_points >= 90:
+                    # extra level for Schneider
+                    level += 1
+                if declarer_tricks == Game.MAX_ROUNDS:
+                    # extra level for Schwarz
+                    level += 1
             else:
-                # suit value
-                base_value = 9 + self.trump_enc.index(1)
+                if card_points <= 30:
+                    # extra level for Schneider lost
+                    level += 1
+                if declarer_tricks == 0:
+                    # extra level for Schwarz lost
+                    level += 1
 
-            # 1 for game, get_level includes "with" and "without" for suit games
-            level = 1 + self.game.game_variant.get_level()
+            game_value = base_value * level
+            if self.game.bid_value > game_value:
+                # overbid: the game is lost with the smallest multiple of the base value above the bid
+                won = False
+                game_value = base_value * math.ceil(self.game.bid_value / base_value)
 
-            skat_points = self.game.skat[0].get_value() + self.game.skat[1].get_value()
+        if current_player == declarer:
+            # 50 points for winning, double the value and a malus of 50 for losing
+            return game_value + 50 if won else -2 * game_value - 50
 
-            if current_player == self.game.get_declarer():
-                # include Skat points
-                card_points = current_player.sum_trick_values() + skat_points
-
-                if self.game.has_declarer_won(skat_points):
-                    if card_points >= 90:
-                        # extra level for Schneider
-                        level += 1
-                        if card_points == 120:
-                            # extra level for Schwarz
-                            level += 1
-                    # add 50 points for winning
-                    game_points = base_value * level + 50
-                else:
-                    # if declarer lost
-                    if card_points <= 30:
-                        # extra level for Schneider lost
-                        level += 1
-                        if card_points == 0:
-                            # extra level for Schwarz lost
-                            level += 1
-                    # ...deduct double the declared points and a malus of 50
-                    game_points = base_value * level * (-2) - 50
-            elif not self.game.has_declarer_won(skat_points) and current_player != self.game.get_declarer():
-                # we only consider a game of three players
-                game_points = 40
-            else:
-                game_points = 0
-
-        return game_points
+        # each defender gets 40 points if the declarer lost
+        return 40 if not won else 0
 
     def reset(self, current_player_id: int,
               game_first_state: np.ndarray,
@@ -772,13 +753,10 @@ class Env:
 
             self.hand = meta_and_cards_game[-11]
 
-            self.game.game_variant = get_game_variant(self.trump_enc, soloist.cards)
-
             self.last_trick, self.open_cards = [], []
 
-            suit = Card.Suit(self.trump_enc.index(1))
-
-            self.game.game_variant = GameVariantSuit(trump_suit=suit)
+            # matadors are counted with the Skat
+            self.game.game_variant = get_game_variant(self.trump_enc, soloist.cards + self.game.skat, hand=self.hand)
 
             self.state_machine.handle_action(BidCallAction(soloist, 18))
             self.state_machine.handle_action(
@@ -820,12 +798,10 @@ class Env:
                 BidPassAction(self.game.players[(soloist.get_id() + 1) % 3], 18))  # id starts at 0
             self.state_machine.handle_action(BidPassAction(self.game.players[(soloist.get_id() + 2) % 3], 18))
 
-            # convert trump to env encoding
-            suit = Card.Suit(trump - 9)
-
-            self.game.game_variant = GameVariantSuit(trump_suit=suit)
-
             self.trump_enc = get_trump_enc(trump)
+
+            # matadors are counted with the Skat
+            self.game.game_variant = get_game_variant(self.trump_enc, soloist.cards + self.game.skat, hand=self.hand)
 
             if not self.hand:
                 self.state_machine.handle_action(PickUpSkatAction(soloist))
@@ -897,8 +873,8 @@ class Env:
                     self.skat_put[1] = True
                     put_card = [1]
 
-                    self.game.game_variant = GameVariantSuit(
-                        get_game_variant(self.trump_enc, self.game.get_declarer().cards).get_trump(), hand=True)
+                    self.game.game_variant = get_game_variant(
+                        self.trump_enc, self.game.get_declarer().cards + self.game.skat, hand=True)
 
                     self.state_machine.handle_action(
                         DeclareGameVariantAction(self.game.get_declarer(), self.game.game_variant))

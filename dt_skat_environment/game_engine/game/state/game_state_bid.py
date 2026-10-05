@@ -133,7 +133,7 @@ class BidStateResponseTurn(GameState):
 
     def bid_accept(self, player, value):
         GameStateBid.check_player_has_passed(self.game, player)
-        if value is not self.game.bid_value:
+        if value != self.game.bid_value:
             raise InvalidPlayerMove("Player " + player.name + " cannot accept bid of "
                                     + str(value) + ". Current bid is " + str(self.game.bid_value))
 
