@@ -40,3 +40,7 @@ data/**/*.CSV
 .idea/**/dbnavigator.xml
 # local research notes
 /docs/
+
+# python caches
+__pycache__/
+.pytest_cache/

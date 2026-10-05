@@ -12,9 +12,16 @@ Skat relevant metrics and predictions.
 Further, you can evaluate pre-trained model on random plays or against yourself.
 Note that playing is prioritized over evaluation over training. You cannot do all or two of them at once.
 
-To install the requirements, run pip install on the [configuration file](requirements.txt): 
+The project requires Python 3.10 or 3.11. To install the requirements, run pip install on the
+[configuration file](requirements.txt): 
 ````shell
 pip install -r requirements.txt
+````
+
+The tests can be run from the root of the repository with:
+
+````shell
+pytest
 ````
 
 The training can be reproduced with the following command:
@@ -45,7 +52,7 @@ python experiments.py --play_as 0 --amount_games_to_play 2000 --random_player Tr
 To let it play against itself with German championship starting configurations:
 
 ````shell
-python experiments.py --online_eval True --amount_games_to_play 2 --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
+python experiments.py --online_eval True --games 0 2 --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
 ````
 
 Note that due to the increased size of datasets, only the raw data tables and not the datasets are included in this
@@ -55,6 +62,42 @@ However, the data_pipeline can read in these data (takes up to several hours) an
 ````shell
 python data_pipeline.py
 ````
+
+## Online fine-tuning (Online Decision Transformer)
+
+As proposed in the future work of the thesis, a pre-trained DT can be fine-tuned online via self-play following the
+[Online Decision Transformer](https://arxiv.org/abs/2202.05607) (Zheng et al., 2022):
+
+````shell
+python online_training.py --pretrained_model "games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023"
+````
+
+Each iteration of [online_training.py](online_training.py)
+1. plays `--games_per_iter` games on random deals. Each seat is played by the learner with probability
+   `--learner_seat_prob`, otherwise by a frozen opponent from a pool containing the pre-trained model and snapshots of
+   the learner (`--snapshot_every`, `--pool_size`). The learner samples its actions from its policy, restricted to the
+   legal cards of the game engine ([online/self_play.py](online/self_play.py)),
+2. adds the learner's trajectories to a FIFO replay buffer ([online/replay_buffer.py](online/replay_buffer.py)), which
+   is initially seeded with offline games (`--offline_games`). The returns-to-go are computed from the achieved rewards
+   (hindsight return relabelling),
+3. performs `--updates_per_iter` gradient steps with the ODT objective: the negative log-likelihood of the buffer's
+   actions with a lower bound on the policy entropy (`--target_entropy`), enforced by a learned temperature
+   ([online/odt.py](online/odt.py)),
+4. every `--eval_every` iterations, compares the learner to the pre-trained model on `--eval_games` fixed deals
+   (duplicate evaluation: every deal is played with the pre-trained model on all seats, with the learner as declarer,
+   and with the learner as both defenders, see [online/evaluation.py](online/evaluation.py)).
+
+The metrics are logged to TensorBoard in `training-logs/online-*` (`eval/delta/*` shows the improvement over the
+pre-trained model), checkpoints are saved to `training_output/online-*`. The defaults are sized for a GPU server; for a
+quick test on a CPU use e.g.
+`--iterations 2 --games_per_iter 16 --updates_per_iter 20 --eval_games 20 --offline_games 0 100`.
+See `python online_training.py --help` for all options.
+
+## Security
+
+The dependencies are pinned to versions without known vulnerabilities (checked with `pip-audit -r requirements.txt`).
+The pre-trained models are stored as `model.safetensors` and loaded with `use_safetensors=True`, so loading a model
+never unpickles data. Only load models and checkpoints from sources you trust.
 
 # Project Structure
 

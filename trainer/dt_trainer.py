@@ -45,6 +45,8 @@ class CustomDecisionTransformerOutput(ModelOutput):
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
         loss
+        entropy
+            Mean entropy of the action distribution at the time steps where a card can be played.
     """
 
     state_preds: torch.FloatTensor = None
@@ -54,6 +56,7 @@ class CustomDecisionTransformerOutput(ModelOutput):
     attentions: torch.FloatTensor = None
     last_hidden_state: torch.FloatTensor = None
     loss: torch.FloatTensor = None
+    entropy: torch.FloatTensor = None
 
 
 class TrainableDT(DecisionTransformerModel):
@@ -257,6 +260,17 @@ class TrainableDT(DecisionTransformerModel):
         loss_pure = nll_loss_fct(preds_wo_zeros, torch.argmax(targets_wo_zeros, dim=1))
         loss = loss_pure
 
+        # entropy of the policy at the time steps where a card can be played,
+        # used as exploration constraint in the online training (see online/odt.py)
+        can_play = (put_card_mask_zeros[:, :, 0] * attention_mask).reshape(-1) > 0
+        probs_play = action_preds_output.reshape(-1, ACT_DIM)[can_play]
+        log_probs_play = action_preds_ls.reshape(-1, ACT_DIM)[can_play]
+        # masked actions have a probability of 0 and a log-probability of (nearly) -inf -> exclude them,
+        # otherwise 0 * -inf produces NaNs in the forward or backward pass
+        log_probs_play = torch.where(probs_play > 0, log_probs_play, torch.zeros_like(log_probs_play))
+        entropy_per_step = -(probs_play * log_probs_play).sum(dim=1)
+        entropy = entropy_per_step.mean() if entropy_per_step.numel() > 0 else entropy_per_step.sum()
+
         action_preds = action_preds_output * put_card_mask_zeros
 
         # for evaluation and online training
@@ -270,7 +284,8 @@ class TrainableDT(DecisionTransformerModel):
             return_preds=return_preds,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
-            loss=loss
+            loss=loss,
+            entropy=entropy
         )
 
     def forward(self, **kwargs):
