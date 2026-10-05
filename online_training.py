@@ -162,7 +162,8 @@ def run_online_training(args):
 
         # 2. ODT updates on the replay buffer
         if collator is None:
-            collator = DecisionTransformerSkatDataCollator(buffer, args["batch_size"])
+            collator = DecisionTransformerSkatDataCollator(buffer, args["batch_size"], augment_prob=args["augment_prob"],
+                                                           seed=args["seed"])
 
         update_logs = [updater.step(collator(buffer.trajectories)) for _ in range(args["updates_per_iter"])]
 
@@ -268,6 +269,8 @@ def get_parser():
     parser.add_argument('--hidden_card_head', type=str2bool, default=False,
                         help='Train an auxiliary head predicting the unseen cards (added if the model has none).')
     parser.add_argument('--hidden_loss_weight', type=float, default=0.5)
+    parser.add_argument('--augment_prob', type=float, default=0.0,
+                        help='Probability to permute the suits of a sampled game.')
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', '-wd', type=float, default=5e-4)
     parser.add_argument('--warmup_steps', type=int, default=1000)

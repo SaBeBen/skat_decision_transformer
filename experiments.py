@@ -117,7 +117,7 @@ def run_training(args):
 
     dataset = dataset.with_format("torch")
 
-    collator = DecisionTransformerSkatDataCollator(dataset["train"], batch_size)
+    collator = DecisionTransformerSkatDataCollator(dataset["train"], batch_size, augment_prob=args['augment_prob'])
 
     config = DecisionTransformerConfig(
         state_dim=state_dim,
@@ -713,6 +713,8 @@ if __name__ == '__main__':
                         help='Add an auxiliary head that predicts the locations of the unseen cards.')
     parser.add_argument('--hidden_loss_weight', type=float, default=0.5,
                         help='Weight of the hidden card loss relative to the action loss.')
+    parser.add_argument('--augment_prob', type=float, default=0.0,
+                        help='Probability to permute the suits of a training game (one-hot encoding only).')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--n_layer', type=int, default=2, help='number of hidden layers')
     parser.add_argument('--n_head', type=int, default=1, help='number of attention heads')

@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from dt_skat_environment.environment import ACT_DIM, MAX_EPISODE_LENGTH
+from trainer.augmentation import permute_suits, STATE_DIM
 
 
 @dataclass
@@ -21,11 +22,16 @@ class DecisionTransformerSkatDataCollator:
     n_traj: int = 0  # to store the number of trajectories in the dataset
     games_ind: tuple = (0, 0)
 
-    def __init__(self, dataset, batch_size=32) -> None:
+    def __init__(self, dataset, batch_size=32, augment_prob=0.0, seed=None) -> None:
+        """
+        :param augment_prob: probability to permute the suits of a sampled game (one-hot encoding only).
+        """
         self.act_dim = len(dataset[0]["actions"][0])
         self.state_dim = len(dataset[0]["states"][0])
         self.dataset = dataset
         self.batch_size = batch_size
+        self.augment_prob = augment_prob if self.state_dim == STATE_DIM else 0.0
+        self.rng = np.random.default_rng(seed)
         # we do not need state normalisation with our one-hot encoding
 
     def _discount_cumsum(self, x, gamma):
@@ -63,6 +69,9 @@ class DecisionTransformerSkatDataCollator:
         for ind in batch_inds:
 
             feature = features[int(ind)]
+
+            if self.augment_prob > 0 and self.rng.random() < self.augment_prob:
+                feature = permute_suits({key: np.asarray(value) for key, value in feature.items()}, rng=self.rng)
 
             # why do we use a randint?
             # To be able to jump into one game -> predict from every position and improve training

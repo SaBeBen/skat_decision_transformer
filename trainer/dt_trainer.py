@@ -419,7 +419,16 @@ def load_trainable_dt(path, use_mask=True, **config_overrides) -> TrainableDT:
 
 
 class DTTrainer(Trainer):
-    def evaluate(
+    def evaluate(self, *args, **kwargs) -> Dict[str, float]:
+        # evaluate on the original games, without data augmentation
+        augment_prob = getattr(self.data_collator, "augment_prob", 0.0)
+        self.data_collator.augment_prob = 0.0
+        try:
+            return self._evaluate(*args, **kwargs)
+        finally:
+            self.data_collator.augment_prob = augment_prob
+
+    def _evaluate(
             self,
             eval_dataset: Optional[Dataset] = None,
             ignore_keys: Optional[List[str]] = None,

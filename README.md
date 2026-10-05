@@ -38,6 +38,11 @@ opponent or Skat). The data pipeline records these locations for every time step
 prediction is added to the loss with `--hidden_loss_weight`. The auxiliary task shapes the representation of the state
 towards inferring the hidden cards, which is crucial in Skat.
 
+`--augment_prob` permutes the suits of training games with the given probability
+([trainer/augmentation.py](trainer/augmentation.py)): the non-trump suits in suit games and all suits in grand (without
+the jacks) and null games. This does not change the course or the value of a game and multiplies the variety of the
+expert data.
+
 For more information about the options:
 
 ````shell
