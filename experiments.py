@@ -28,6 +28,7 @@ import data_pipeline
 from trainer.dt_trainer import TrainableDT, DTTrainer
 from trainer.inference import get_action
 from utils import str2bool
+from trainer.declaration import DeclarationDT, DeclarationPolicy, declarations_from_data, train_declaration_model
 from online.agents import HumanAgent, RandomAgent
 from online.self_play import play_game, compute_target_returns
 from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
@@ -520,7 +521,8 @@ def play_with_two(args):
                                    amount_games=amount_games,
                                    human_player_start=human_position,
                                    random_activated=random_activated,
-                                   reward_convention=args['reward_convention']
+                                   reward_convention=args['reward_convention'],
+                                   declaration=load_declaration_policy(args)
                                    )
 
     print(f"Performance of {amount_games} games: ")
@@ -532,7 +534,8 @@ def play_with_two_agents(model,
                          amount_games,
                          human_player_start,
                          random_activated=False,
-                         reward_convention="default"):
+                         reward_convention="default",
+                         declaration=None):
     """
 
     :param model: Pre-trained model to use for the agents.
@@ -541,6 +544,7 @@ def play_with_two_agents(model,
     :param human_player_start: Starting position of human 0 for fore-hand, 1 for mid-hand, 2 for rear-hand
     :param random_activated: Whether to take over the human position and choose random legal cards in game.
     :param reward_convention: The reward convention the model was trained with.
+    :param declaration: optional bidding policy, otherwise the player with the best cards plays a suit game.
     :return: Dataframe with statistics about the played games.
     """
 
@@ -562,7 +566,7 @@ def play_with_two_agents(model,
         human_player_id = (human_player_start + j) % 3
 
         # build the environment for the evaluation
-        states = env.online_reset()
+        states = env.online_reset(declaration=declaration)
 
         seat_agents = [model] * 3
         seat_agents[human_player_id] = human
@@ -628,6 +632,38 @@ def play_with_two_agents(model,
     return result
 
 
+def run_declaration_training(args):
+    games_to_load = slice(args['games'][0], args['games'][1])
+
+    print(f"\nLoading games {games_to_load.start, games_to_load.stop} of the {args['championship']}...")
+    meta_and_cards, _ = data_pipeline.get_games(championship=args['championship'],
+                                                games_indices=games_to_load,
+                                                include_grand=args['include_grand'],
+                                                include_null=args['include_null'])
+    states, declarations, returns = declarations_from_data(meta_and_cards)
+
+    if args['pretrained_model'] is not None:
+        model = DeclarationDT.from_pretrained(args['pretrained_model'], use_safetensors=True)
+    else:
+        model = DeclarationDT.create()
+
+    train_declaration_model(model, states, declarations, returns, epochs=args['num_epochs'],
+                            batch_size=args['batch_size'], learning_rate=args['learning_rate'],
+                            weight_decay=args['weight_decay'])
+
+    current_time = time.asctime().replace(':', '-').replace(' ', '_')
+    path = rf"./pretrained_models/declaration-games_{games_to_load.start}-{games_to_load.stop}-{current_time}"
+    model.save_pretrained(path)
+    print(f"Saved the declaration model to {path}")
+
+
+def load_declaration_policy(args):
+    if args.get('declaration_model') is None:
+        return None
+    model = DeclarationDT.from_pretrained(args['declaration_model'], use_safetensors=True).eval()
+    return DeclarationPolicy(model, greedy=True)
+
+
 def file_check(rel_path: str):
     # check whether the pre-trained model file exists
     from os.path import exists
@@ -691,6 +727,12 @@ if __name__ == '__main__':
                         # default="games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
+    parser.add_argument('--train_declaration', type=str2bool, default=False,
+                        help='Train the return-conditioned bidding/declaration model on --games instead of the DT. '
+                             'Uses --num_epochs, --batch_size, --learning_rate and --weight_decay.')
+    parser.add_argument('--declaration_model', type=file_check, default=None,
+                        help='Declaration model in the folder "pretrained_models" for the auction when playing. '
+                             'Without it, the player with the best cards plays a suit game.')
     parser.add_argument('--online_eval', type=str2bool, default=False,
                         help="Uses the pre-trained model to play online against itself."
                              " Rules out further training and evaluation of model.")
@@ -706,7 +748,9 @@ if __name__ == '__main__':
 
     args = vars(parser.parse_args())
 
-    if not args['play_as'] is None:
+    if args['train_declaration']:
+        run_declaration_training(args)
+    elif not args['play_as'] is None:
         play_with_two(args)
     elif args['online_eval']:
         run_online_eval(args)

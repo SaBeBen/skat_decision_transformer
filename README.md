@@ -70,6 +70,22 @@ However, the data_pipeline can read in these data (takes up to several hours) an
 python data_pipeline.py
 ````
 
+## Bidding and game declaration
+
+The auction and the choice of the game are learned by a second, return-conditioned Decision Transformer with a single
+time step ([trainer/declaration.py](trainer/declaration.py)). Given the dealt hand, the seat and a target return, it
+predicts the declaration (pass, a suit, grand or null, each from the hand or with the Skat). The highest bid of a player
+is the value of its declaration, and the auction follows the order of the rules (middle-hand bids to fore-hand,
+afterwards rear-hand bids to the winner). It is trained on the declarations of the data and the points they achieved:
+
+````shell
+python experiments.py --train_declaration True --games 0 -1 --num_epochs 20 --batch_size 256
+````
+
+The model is saved to `pretrained_models/declaration-*` and can be used with `--declaration_model` when playing
+(`experiments.py`) or in the online fine-tuning, where `--finetune_declaration True` also fine-tunes it on the points
+its declarations achieve in self-play. Without a declaration model, the player with the best cards plays a suit game.
+
 ## Online fine-tuning (Online Decision Transformer)
 
 As proposed in the future work of the thesis, a pre-trained DT can be fine-tuned online via self-play following the

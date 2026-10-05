@@ -30,13 +30,19 @@ from online.replay_buffer import TrajectoryReplayBuffer
 from online.self_play import play_game, compute_target_returns
 from trainer.data_collator import DecisionTransformerSkatDataCollator
 from trainer.dt_trainer import TrainableDT
+from trainer.declaration import DeclarationDT, DeclarationPolicy
 from utils import str2bool
 
 CARD_ENC = "one-hot"  # the rule mask of the model (and the pre-trained models) require the one-hot encoding
 
 
-def collect_games(learner, pool, n_games, args, rng, game_counter):
-    """Plays n_games self-play games and returns the learner's trajectories and statistics."""
+def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=None, declaration_examples=None):
+    """
+    Plays n_games self-play games and returns the learner's trajectories and statistics.
+
+    :param declaration: optional bidding policy to start the games.
+    :param declaration_examples: list collecting (hand, declaration, achieved points) of every seat.
+    """
     learner.eval()
     trajectories = []
     stats = {"declarer_points": [], "declarer_won": [], "learner_declarer_points": [], "learner_defender_won": [],
@@ -48,7 +54,7 @@ def collect_games(learner, pool, n_games, args, rng, game_counter):
         game_counter += 1
 
         env = Env(CARD_ENC)
-        first_states = env.online_reset(point_rewards=args["point_rewards"])
+        first_states = env.online_reset(point_rewards=args["point_rewards"], declaration=declaration)
 
         is_learner = rng.random(3) < args["learner_seat_prob"]
         if not is_learner.any():
@@ -61,6 +67,11 @@ def collect_games(learner, pool, n_games, args, rng, game_counter):
                            reward_convention=args["reward_convention"])
 
         trajectories += [result["trajectories"][pl] for pl in range(3) if is_learner[pl]]
+
+        if declaration is not None and declaration_examples is not None:
+            # hindsight: the declaration of each seat is labelled with the points it achieved
+            declaration_examples += [(state, index, result["game_points"][pl])
+                                     for pl, (state, index) in enumerate(declaration.last_choices)]
 
         declarer_id = result["declarer_id"]
         stats["declarer_points"].append(result["game_points"][declarer_id])
@@ -124,6 +135,18 @@ def run_online_training(args):
     writer.add_text("config", "\n\n".join(f"{key}: {value}" for key, value in args.items()))
     output_dir = os.path.join(args["output_dir"], run_name)
 
+    # optional bidding with a declaration model, fine-tuned on its own outcomes
+    declaration, declaration_baseline, declaration_optimizer = None, None, None
+    declaration_examples = []
+    if args["declaration_model"] is not None:
+        declaration_model = DeclarationDT.from_pretrained(args["declaration_model"], use_safetensors=True).to(device)
+        declaration = DeclarationPolicy(declaration_model, greedy=not args["finetune_declaration"],
+                                        temperature=args["temperature"], rng=rng)
+        # the evaluation bids with the initial model, so that the deals stay comparable
+        declaration_baseline = DeclarationPolicy(copy.deepcopy(declaration_model).eval(), greedy=True)
+        if args["finetune_declaration"]:
+            declaration_optimizer = torch.optim.AdamW(declaration_model.parameters(), lr=args["learning_rate"])
+
     collator = None
     game_counter = 0
 
@@ -132,7 +155,7 @@ def run_online_training(args):
 
         # 1. self-play with the stochastic policy of the learner
         trajectories, stats, game_counter = collect_games(learner, pool, args["games_per_iter"], args, rng,
-                                                          game_counter)
+                                                          game_counter, declaration, declaration_examples)
         buffer.extend(trajectories)
         collect_time = time.time() - start
 
@@ -141,6 +164,23 @@ def run_online_training(args):
             collator = DecisionTransformerSkatDataCollator(buffer, args["batch_size"])
 
         update_logs = [updater.step(collator(buffer.trajectories)) for _ in range(args["updates_per_iter"])]
+
+        if declaration_optimizer is not None and declaration_examples:
+            declaration_examples = declaration_examples[-args["buffer_size"]:]
+            declaration_losses = []
+            declaration.model.train()
+            for _ in range(args["updates_per_iter"]):
+                batch = [declaration_examples[k] for k in rng.integers(len(declaration_examples),
+                                                                       size=args["batch_size"])]
+                loss = declaration.model.loss(torch.from_numpy(np.stack([b[0] for b in batch])),
+                                              torch.tensor([b[1] for b in batch]),
+                                              torch.tensor([b[2] for b in batch], dtype=torch.float32))
+                declaration_optimizer.zero_grad()
+                loss.backward()
+                declaration_optimizer.step()
+                declaration_losses.append(loss.item())
+            declaration.model.eval()
+            writer.add_scalar("train/declaration_loss", float(np.mean(declaration_losses)), iteration)
 
         step = iteration
         for key in update_logs[0]:
@@ -176,7 +216,8 @@ def run_online_training(args):
             learner.eval()
             metrics = duplicate_evaluation(learner, pretrained, args["eval_games"], seed=args["eval_seed"],
                                            point_rewards=args["point_rewards"], rtg_scale=args["eval_rtg_scale"],
-                                           card_enc=CARD_ENC, reward_convention=args["reward_convention"])
+                                           card_enc=CARD_ENC, reward_convention=args["reward_convention"],
+                                           declaration=declaration_baseline)
             for key, value in metrics.items():
                 writer.add_scalar(f"eval/{key}", value, step)
             print("Evaluation against the pre-trained model: " +
@@ -184,8 +225,12 @@ def run_online_training(args):
 
         if args["save_every"] > 0 and iteration % args["save_every"] == 0:
             learner.save_pretrained(os.path.join(output_dir, f"iteration_{iteration}"))
+            if declaration_optimizer is not None:
+                declaration.model.save_pretrained(os.path.join(output_dir, f"declaration_iteration_{iteration}"))
 
     learner.save_pretrained(os.path.join(output_dir, "final"))
+    if declaration_optimizer is not None:
+        declaration.model.save_pretrained(os.path.join(output_dir, "declaration_final"))
     writer.close()
     print(f"\nSaved the fine-tuned model to {os.path.join(output_dir, 'final')}")
 
@@ -233,6 +278,11 @@ def get_parser():
                         help='Scale of the initial return-to-go for exploration (see compute_target_returns).')
     parser.add_argument('--eval_rtg_scale', type=float, default=0.7,
                         help='Scale of the initial return-to-go in the evaluation (0.7 as in the thesis).')
+    parser.add_argument('--declaration_model', type=file_check, default=None,
+                        help="Declaration model in 'pretrained_models' for the auction. Without it, the player with "
+                             "the best cards plays a suit game.")
+    parser.add_argument('--finetune_declaration', type=str2bool, default=False,
+                        help='Sample declarations and fine-tune the declaration model on the achieved points.')
     parser.add_argument('--learner_seat_prob', type=float, default=0.8,
                         help='Probability that a seat is played by the learner instead of a frozen opponent.')
     parser.add_argument('--snapshot_every', type=int, default=10,

@@ -7,11 +7,11 @@ from dt_skat_environment.environment import Env
 from online.self_play import play_game, compute_target_returns
 
 
-def _play_deal(seed, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention):
-    # the same seed gives the same deal and declarer (Kinback scheme is deterministic)
+def _play_deal(seed, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention, declaration):
+    # the same seed gives the same deal and declarer (Kinback scheme and greedy bidding are deterministic)
     random.seed(seed)
     env = Env(card_enc)
-    first_states = env.online_reset(point_rewards=point_rewards)
+    first_states = env.online_reset(point_rewards=point_rewards, declaration=declaration)
     seat_models = seat_models_fn(env.game.get_declarer().get_id())
     return play_game(env, seat_models, first_states,
                      compute_target_returns(env, point_rewards, rtg_scale), greedy=True,
@@ -20,7 +20,7 @@ def _play_deal(seed, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_
 
 def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_007, point_rewards: bool = True,
                          rtg_scale: float = 0.7, card_enc: str = "one-hot",
-                         reward_convention: str = "default") -> Dict[str, float]:
+                         reward_convention: str = "default", declaration=None) -> Dict[str, float]:
     """
     Compares the learner to the baseline (e.g. the pre-trained DT) on the same deals (duplicate evaluation).
 
@@ -30,6 +30,7 @@ def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_
     - baseline declarer against two learner defenders.
     Playing the same cards in every configuration removes most of the luck of the deal from the comparison.
 
+    :param declaration: optional bidding policy (see trainer/declaration.py), the same for all configurations.
     :return: average Seeger-Fabian points of the declarer and win rates of declarer/defenders per configuration,
         and the differences of the learner to the baseline.
     """
@@ -44,7 +45,8 @@ def duplicate_evaluation(learner, baseline, n_games: int, seed: int = 1_000_000_
 
     for i in range(n_games):
         for name, seat_models_fn in configurations.items():
-            result = _play_deal(seed + i, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention)
+            result = _play_deal(seed + i, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_convention,
+                                declaration)
             declarer_points[name].append(result["game_points"][result["declarer_id"]])
             declarer_won[name].append(result["declarer_won"])
 
