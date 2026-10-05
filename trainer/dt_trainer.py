@@ -78,13 +78,13 @@ class TrainableDT(DecisionTransformerModel):
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         batch_size, seq_length = states.shape[0], states.shape[1]
 
         if attention_mask is None:
             # attention mask for GPT: 1 if it can be attended to, 0 if not
-            attention_mask = torch.ones((batch_size, seq_length), dtype=torch.long)
+            attention_mask = torch.ones((batch_size, seq_length), dtype=torch.long, device=states.device)
 
         # embed each modality with a different head
         state_embeddings = self.embed_state(states)
@@ -409,7 +409,8 @@ class DTTrainer(Trainer):
 
         return output.metrics
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]],
+                      num_items_in_batch: Optional[Union[torch.Tensor, int]] = None) -> torch.Tensor:
         model.train()
         inputs = self._prepare_inputs(inputs)
 
@@ -419,13 +420,8 @@ class DTTrainer(Trainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.do_grad_scaling:
-            self.scaler.scale(loss).backward()
-        # elif self.use_apex:
-        # with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-        #     scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss)
+        # the accelerator handles mixed precision loss scaling
+        self.accelerator.backward(loss)
 
         outputs["probability_of_correct_action"] = round(float(outputs["probability_of_correct_action"]), 4)
         outputs["loss"] = round(float(loss), 4)

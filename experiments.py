@@ -7,6 +7,7 @@ See https://huggingface.co/blog/train-decision-transformers for more information
 
 import argparse
 import math
+import os
 import random
 # import resource
 import time
@@ -122,7 +123,6 @@ def run_training(args):
         embd_pdrop=dropout,
         resid_pdrop=dropout,
         attn_pdrop=dropout,
-        max_length=MAX_EPISODE_LENGTH,
     )
 
     if pretrained_model_path is not None:
@@ -130,7 +130,7 @@ def run_training(args):
 
         # uses a mask when employing one-hot encoding
         use_mask = hand_encoding == "one-hot"
-        pretrained_model = TrainableDT.from_pretrained(pretrained_model_path, use_mask)
+        pretrained_model = TrainableDT.from_pretrained(pretrained_model_path, use_mask=use_mask, use_safetensors=True)
         model = pretrained_model
 
         if model.config.state_dim != state_dim:
@@ -149,6 +149,9 @@ def run_training(args):
 
     logging_dir = rf"./training-logs/{dir_name}"
 
+    # since transformers v5, the TensorBoard logging directory is set by an environment variable
+    os.environ["TENSORBOARD_LOGGING_DIR"] = logging_dir
+
     training_args = TrainingArguments(
         report_to=["tensorboard"],
         output_dir="training_output/",
@@ -159,20 +162,18 @@ def run_training(args):
         gradient_accumulation_steps=1,
         learning_rate=l_rate,
         weight_decay=weight_decay,
-        warmup_ratio=warmup_ratio,
+        warmup_steps=warmup_ratio,  # a float < 1 is interpreted as ratio of the total training steps
         optim="adamw_torch",
         max_grad_norm=0.1,
         logging_steps=logging_steps,
-        logging_dir=logging_dir,
         # dataloader_drop_last=True,  # drop incomplete batches, prevents training of less than batch_size games
         # bf16=True,
-        save_steps=5000
+        save_steps=5000,
+        use_cpu=device.type == 'cpu',
+        do_eval=eval_in_training,
+        eval_strategy="steps" if eval_in_training else "no",
+        eval_steps=500,
     )
-
-    if eval_in_training:
-        training_args.do_eval = True
-        training_args.evaluation_strategy = "steps"
-        training_args.eval_steps = 500
 
     trainer = DTTrainer(
         model=model,
@@ -201,7 +202,8 @@ def run_training(args):
 
 
 # Function that gets an action from the model using autoregressive prediction
-# with a window of the previous 20 timesteps. We only need a maximum of 12 timesteps
+# with a window of the previous 12 timesteps (one game)
+@torch.no_grad()
 def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     # This implementation does not condition on past rewards
 
@@ -211,13 +213,13 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     timesteps = timesteps.reshape(1, -1)
 
     # The prediction is conditioned on up to 20 previous time-steps
-    states = states[:, -model.config.max_length:]
-    actions = actions[:, -model.config.max_length:]
-    returns_to_go = returns_to_go[:, -model.config.max_length:]
-    timesteps = timesteps[:, -model.config.max_length:]
+    states = states[:, -model.config.max_ep_len:]
+    actions = actions[:, -model.config.max_ep_len:]
+    returns_to_go = returns_to_go[:, -model.config.max_ep_len:]
+    timesteps = timesteps[:, -model.config.max_ep_len:]
 
     # pad all tokens to sequence length, this is required if we process batches
-    padding = model.config.max_length - states.shape[1]
+    padding = model.config.max_ep_len - states.shape[1]
     attention_mask = torch.cat([torch.zeros(padding), torch.ones(states.shape[1])])
     attention_mask = attention_mask.to(dtype=torch.long).reshape(1, -1)
     states = torch.cat([torch.zeros((1, padding, model.config.state_dim)), states], dim=1).float()
@@ -225,17 +227,18 @@ def get_action(model, states, actions, rewards, returns_to_go, timesteps):
     returns_to_go = torch.cat([torch.zeros((1, padding, 1)), returns_to_go], dim=1).float()
     timesteps = torch.cat([torch.zeros((1, padding), dtype=torch.long), timesteps], dim=1)
 
-    # perform the prediction
+    # perform the prediction on the device of the model (e.g. for online training on a GPU)
+    device = model.device
     state_preds, action_preds, return_preds = model.original_forward(
-        states=states,
-        actions=actions,
+        states=states.to(device),
+        actions=actions.to(device),
         rewards=rewards,
-        returns_to_go=returns_to_go,
-        timesteps=timesteps,
-        attention_mask=attention_mask,
+        returns_to_go=returns_to_go.to(device),
+        timesteps=timesteps.to(device),
+        attention_mask=attention_mask.to(device),
         return_dict=False,
     )
-    return action_preds[0, -1]
+    return action_preds[0, -1].cpu()
 
 
 def evaluate_in_env(model,
@@ -421,7 +424,7 @@ def run_online_eval(args):
     use_mask = True
 
     # load model to play against
-    pretrained_model = TrainableDT.from_pretrained(pretrained_model, use_mask)
+    pretrained_model = TrainableDT.from_pretrained(pretrained_model, use_mask=use_mask, use_safetensors=True)
 
     print(f"\nLoading data from championship {championship}...")
     data, _, first_states, meta_and_cards, _, _ = data_pipeline.get_states_actions_rewards(
@@ -447,11 +450,11 @@ def run_online_eval(args):
 
     amount_games = games_to_load.stop - games_to_load.start
 
-    results["AI"]["Wins of Declarer"] = results["AI"]["Wins of Declarer"] / amount_games
-    results["AI"]["Wins of Defenders"] = results["AI"]["Wins of Defenders"] / amount_games
+    results.loc["Wins of Declarer", "AI"] /= amount_games
+    results.loc["Wins of Defenders", "AI"] /= amount_games
 
-    results["Championship"]["Wins of Declarer"] = results["Championship"]["Wins of Declarer"] / amount_games
-    results["Championship"]["Wins of Defenders"] = results["Championship"]["Wins of Defenders"] / amount_games
+    results.loc["Wins of Declarer", "Championship"] /= amount_games
+    results.loc["Wins of Defenders", "Championship"] /= amount_games
 
     print(f"Comparison of AI agents against themselves and human data. \n"
           f"Starting configuration of games {games_to_load.start, games_to_load.stop} "
@@ -700,7 +703,7 @@ def play_with_two(args):
     use_mask = True
 
     # Load pre-trained model to play against
-    pretrained_model = TrainableDT.from_pretrained(pretrained_model, use_mask)
+    pretrained_model = TrainableDT.from_pretrained(pretrained_model, use_mask=use_mask, use_safetensors=True)
 
     pretrained_model.config.state_dim = state_dim
 
