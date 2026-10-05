@@ -29,6 +29,8 @@ from trainer.dt_trainer import TrainableDT, DTTrainer, load_trainable_dt
 from trainer.inference import get_action
 from utils import str2bool
 from trainer.declaration import DeclarationDT, DeclarationPolicy, declarations_from_data, train_declaration_model
+from trainer.return_model import ReturnModel, train_return_model, rtg_targets
+from online.replay_buffer import trajectories_from_data
 from online.agents import HumanAgent, RandomAgent
 from online.self_play import play_game, compute_target_returns
 from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
@@ -117,7 +119,18 @@ def run_training(args):
 
     dataset = dataset.with_format("torch")
 
-    collator = DecisionTransformerSkatDataCollator(dataset["train"], batch_size, augment_prob=args['augment_prob'])
+    # optional relabelling of the returns-to-go against the luck of the deal
+    rtg_relabeler = None
+    if args['rtg_mode'] != "raw":
+        if args['return_model'] is None:
+            raise ValueError("--rtg_mode requires a --return_model (see --train_return_model).")
+        return_model = ReturnModel.load(args['return_model'])
+        if return_model.mode != args['rtg_mode']:
+            raise ValueError(f"The return model was trained for {return_model.mode}, not {args['rtg_mode']}.")
+        rtg_relabeler = return_model.relabel
+
+    collator = DecisionTransformerSkatDataCollator(dataset["train"], batch_size, augment_prob=args['augment_prob'],
+                                                   rtg_relabeler=rtg_relabeler)
 
     config = DecisionTransformerConfig(
         state_dim=state_dim,
@@ -151,6 +164,13 @@ def run_training(args):
     else:
         use_mask = hand_encoding == "one-hot"
         model = TrainableDT(config, use_mask=use_mask)
+
+    if rtg_relabeler is not None:
+        # the targets the model is conditioned on when playing
+        model.config.rtg_mode = args['rtg_mode']
+        model.config.rtg_targets = rtg_targets(trajectories_from_data(data), rtg_relabeler, args['rtg_quantile'])
+        model.config.return_model = os.path.basename(os.path.normpath(args['return_model']))
+        print(f"Relabelled returns-to-go ({args['rtg_mode']}), targets when playing: {model.config.rtg_targets}")
 
     model = model.to(device)
 
@@ -459,7 +479,7 @@ def eval_three_agents(model, point_reward, card_enc, game_idx,
         # build the environment for the evaluation by passing every perspective
         states = env.online_reset(meta_and_cards[j], first_game_states[games_idx])
 
-        result = play_game(env, [model] * 3, states, compute_target_returns(env, point_reward, scale),
+        result = play_game(env, [model] * 3, states, compute_target_returns(env, point_reward, scale, [model] * 3),
                            greedy=True, reward_convention=reward_convention)
 
         achieved_points_in_data = meta_and_cards[j][-5]
@@ -575,7 +595,7 @@ def play_with_two_agents(model,
         seat_agents = [model] * 3
         seat_agents[human_player_id] = human
 
-        result = play_game(env, seat_agents, states, compute_target_returns(env, point_reward),
+        result = play_game(env, seat_agents, states, compute_target_returns(env, point_reward, 1.0, seat_agents),
                            greedy=True, reward_convention=reward_convention)
 
         declarer_id = result["declarer_id"]
@@ -634,6 +654,30 @@ def play_with_two_agents(model,
                                          "Declarer games", "Defender games"])
 
     return result
+
+
+def run_return_model_training(args):
+    games_to_load = slice(args['games'][0], args['games'][1])
+    mode = args['train_return_model']
+
+    print(f"\nLoading games {games_to_load.start, games_to_load.stop} of the {args['championship']}...")
+    data, *_ = data_pipeline.get_states_actions_rewards(
+        championship=args['championship'],
+        games_indices=games_to_load,
+        point_rewards=args['point_rewards'],
+        card_enc="one-hot",
+        reward_convention=args['reward_convention'],
+        include_grand=args['include_grand'],
+        include_null=args['include_null'])
+
+    model = train_return_model(trajectories_from_data(data), mode, epochs=args['num_epochs'],
+                               batch_size=args['batch_size'], learning_rate=args['learning_rate'],
+                               weight_decay=args['weight_decay'])
+
+    current_time = time.asctime().replace(':', '-').replace(' ', '_')
+    path = rf"./pretrained_models/return-{mode}-games_{games_to_load.start}-{games_to_load.stop}-{current_time}"
+    model.save(path)
+    print(f"Saved the return model to {path}")
 
 
 def run_declaration_training(args):
@@ -737,6 +781,16 @@ if __name__ == '__main__':
                         # default="games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
+    parser.add_argument('--rtg_mode', type=str, default='raw', choices=['raw', 'expected', 'deal_margin'],
+                        help='Returns-to-go to condition on: raw returns, expected returns of the actions given the '
+                             'observations or the margin over the expected return of the deal (needs --return_model).')
+    parser.add_argument('--return_model', type=file_check, default=None,
+                        help='Return model in the folder "pretrained_models" for --rtg_mode.')
+    parser.add_argument('--rtg_quantile', type=float, default=0.9,
+                        help='Quantile of the relabelled initial returns-to-go the model is conditioned on when playing.')
+    parser.add_argument('--train_return_model', type=str, default=None, choices=['expected', 'deal_margin'],
+                        help='Train a return model for the relabelling on --games instead of the DT (one-hot only). '
+                             'Uses --num_epochs, --batch_size, --learning_rate and --weight_decay.')
     parser.add_argument('--train_declaration', type=str2bool, default=False,
                         help='Train the return-conditioned bidding/declaration model on --games instead of the DT. '
                              'Uses --num_epochs, --batch_size, --learning_rate and --weight_decay.')
@@ -758,7 +812,9 @@ if __name__ == '__main__':
 
     args = vars(parser.parse_args())
 
-    if args['train_declaration']:
+    if args['train_return_model'] is not None:
+        run_return_model_training(args)
+    elif args['train_declaration']:
         run_declaration_training(args)
     elif not args['play_as'] is None:
         play_with_two(args)

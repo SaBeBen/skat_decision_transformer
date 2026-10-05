@@ -31,6 +31,7 @@ from online.self_play import play_game, compute_target_returns
 from trainer.data_collator import DecisionTransformerSkatDataCollator
 from trainer.dt_trainer import load_trainable_dt
 from trainer.declaration import DeclarationDT, DeclarationPolicy
+from trainer.return_model import ReturnModel
 from utils import str2bool
 
 CARD_ENC = "one-hot"  # the rule mask of the model (and the pre-trained models) require the one-hot encoding
@@ -62,7 +63,7 @@ def collect_games(learner, pool, n_games, args, rng, game_counter, declaration=N
         seat_models = [learner if is_learner[pl] else pool[rng.integers(len(pool))] for pl in range(3)]
 
         result = play_game(env, seat_models, first_states,
-                           compute_target_returns(env, args["point_rewards"], args["rtg_scale"]),
+                           compute_target_returns(env, args["point_rewards"], args["rtg_scale"], seat_models),
                            greedy=False, temperature=args["temperature"], rng=rng,
                            reward_convention=args["reward_convention"])
 
@@ -100,6 +101,12 @@ def run_online_training(args):
     learner = load_trainable_dt(args["pretrained_model"], use_mask=True, **head_kwargs).to(device)
     if learner.config.state_dim != state_dim:
         raise ValueError("The pre-trained model does not use the one-hot state representation.")
+
+    # returns-to-go relabelled by a return model if the DT was trained with them
+    rtg_relabeler = None
+    return_model = args["return_model"] or getattr(learner.config, "return_model", None)
+    if getattr(learner.config, "rtg_mode", "raw") != "raw" and return_model is not None:
+        rtg_relabeler = ReturnModel.load(file_check(os.path.basename(os.path.normpath(return_model)))).relabel
 
     # the frozen pre-trained model is the first opponent and the baseline of the evaluation
     pretrained = copy.deepcopy(learner).eval()
@@ -163,7 +170,7 @@ def run_online_training(args):
         # 2. ODT updates on the replay buffer
         if collator is None:
             collator = DecisionTransformerSkatDataCollator(buffer, args["batch_size"], augment_prob=args["augment_prob"],
-                                                           seed=args["seed"])
+                                                           seed=args["seed"], rtg_relabeler=rtg_relabeler)
 
         update_logs = [updater.step(collator(buffer.trajectories)) for _ in range(args["updates_per_iter"])]
 
@@ -271,6 +278,9 @@ def get_parser():
     parser.add_argument('--hidden_loss_weight', type=float, default=0.5)
     parser.add_argument('--augment_prob', type=float, default=0.0,
                         help='Probability to permute the suits of a sampled game.')
+    parser.add_argument('--return_model', type=file_check, default=None,
+                        help="Return model in 'pretrained_models' to relabel the returns-to-go. Defaults to the one "
+                             "the DT was trained with (config.return_model).")
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', '-wd', type=float, default=5e-4)
     parser.add_argument('--warmup_steps', type=int, default=1000)

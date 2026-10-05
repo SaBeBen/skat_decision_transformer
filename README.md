@@ -43,6 +43,27 @@ towards inferring the hidden cards, which is crucial in Skat.
 the jacks) and null games. This does not change the course or the value of a game and multiplies the variety of the
 expert data.
 
+### Returns-to-go against the luck of the deal
+
+In Skat, the return of a game depends heavily on the dealt cards, so a DT conditioned on raw returns partly learns to
+be lucky instead of playing well. `--rtg_mode` replaces the return-to-go labels while the DT stays unchanged
+([trainer/return_model.py](trainer/return_model.py)):
+
+- `expected`: the expected return of the taken action given only what the player observed (the luck of unseen cards is
+  averaged out),
+- `deal_margin`: the achieved return minus the expected return of the deal, estimated by a model that sees all hands
+  during training (never when playing).
+
+The return models are trained by regression on the returns of the data and saved to `pretrained_models/return-*`:
+
+````shell
+python experiments.py --train_return_model deal_margin --games 0 -1 --num_epochs 20 --batch_size 512
+python experiments.py --games 0 -1 --rtg_mode deal_margin --return_model "<return model>" --save_model True
+````
+
+The DT stores the return-to-go it is conditioned on when playing (a high quantile of the relabelled returns,
+`--rtg_quantile`) in its config.
+
 For more information about the options:
 
 ````shell

@@ -22,9 +22,11 @@ class DecisionTransformerSkatDataCollator:
     n_traj: int = 0  # to store the number of trajectories in the dataset
     games_ind: tuple = (0, 0)
 
-    def __init__(self, dataset, batch_size=32, augment_prob=0.0, seed=None) -> None:
+    def __init__(self, dataset, batch_size=32, augment_prob=0.0, seed=None, rtg_relabeler=None) -> None:
         """
         :param augment_prob: probability to permute the suits of a sampled game (one-hot encoding only).
+        :param rtg_relabeler: optional function mapping a game to its returns-to-go (see trainer/return_model.py),
+            otherwise the discounted sum of the rewards is used.
         """
         self.act_dim = len(dataset[0]["actions"][0])
         self.state_dim = len(dataset[0]["states"][0])
@@ -32,6 +34,7 @@ class DecisionTransformerSkatDataCollator:
         self.batch_size = batch_size
         self.augment_prob = augment_prob if self.state_dim == STATE_DIM else 0.0
         self.rng = np.random.default_rng(seed)
+        self.rtg_relabeler = rtg_relabeler
         # we do not need state normalisation with our one-hot encoding
 
     def _discount_cumsum(self, x, gamma):
@@ -72,6 +75,8 @@ class DecisionTransformerSkatDataCollator:
 
             if self.augment_prob > 0 and self.rng.random() < self.augment_prob:
                 feature = permute_suits({key: np.asarray(value) for key, value in feature.items()}, rng=self.rng)
+            elif self.rtg_relabeler is not None:
+                feature = {key: np.asarray(value) for key, value in feature.items()}
 
             # why do we use a randint?
             # To be able to jump into one game -> predict from every position and improve training
@@ -94,10 +99,12 @@ class DecisionTransformerSkatDataCollator:
 
             timesteps.append(np.arange(0, s[-1].shape[1]).reshape(1, -1))
             timesteps[-1][timesteps[-1] >= self.max_ep_len] = self.max_ep_len - 1  # padding cutoff
-            rtg.append(
-                self._discount_cumsum(np.array(feature["rewards"]), gamma=0.99)[: s[-1].shape[1]].reshape(1, -1, 1)
+            if self.rtg_relabeler is not None:
+                full_rtg = self.rtg_relabeler(feature).reshape(-1, 1)
+            else:
                 # set gamma to your preference (0 < gamma <= 1)
-            )
+                full_rtg = self._discount_cumsum(np.array(feature["rewards"]), gamma=0.99)
+            rtg.append(full_rtg[: s[-1].shape[1]].reshape(1, -1, 1))
             if rtg[-1].shape[1] < s[-1].shape[1]:
                 print("if true")
                 rtg[-1] = np.concatenate([rtg[-1], np.zeros((1, 1, 1))], axis=1)

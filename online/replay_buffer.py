@@ -3,6 +3,22 @@ from typing import Dict, List, Optional
 import numpy as np
 
 
+def trajectories_from_data(data: dict) -> List[Dict[str, np.ndarray]]:
+    """Converts the output of data_pipeline.get_states_actions_rewards into a list of trajectories."""
+    trajectories = []
+    for i in range(len(data["states"])):
+        trajectory = {
+            "states": np.stack(data["states"][i]).astype(np.float32),
+            "actions": np.asarray(data["actions"][i], dtype=np.float32),
+            "rewards": np.asarray(data["rewards"][i], dtype=np.float32).reshape(-1),
+        }
+        for key in ("legal", "hidden"):
+            if key in data:
+                trajectory[key] = np.asarray(data[key][i], dtype=np.int8)
+        trajectories.append(trajectory)
+    return trajectories
+
+
 class TrajectoryReplayBuffer:
     """
     FIFO replay buffer over whole trajectories (games from the perspective of one player), as in the Online DT.
@@ -39,17 +55,7 @@ class TrajectoryReplayBuffer:
             all trajectories if None.
         :return: the number of added trajectories.
         """
-        trajectories = []
-        for i in range(len(data["states"])):
-            trajectory = {
-                "states": np.stack(data["states"][i]).astype(np.float32),
-                "actions": np.asarray(data["actions"][i], dtype=np.float32),
-                "rewards": np.asarray(data["rewards"][i], dtype=np.float32).reshape(-1),
-            }
-            for key in ("legal", "hidden"):
-                if key in data:
-                    trajectory[key] = np.asarray(data[key][i], dtype=np.int8)
-            trajectories.append(trajectory)
+        trajectories = trajectories_from_data(data)
 
         if top_k is not None:
             trajectories.sort(key=lambda traj: traj["rewards"].sum(), reverse=True)

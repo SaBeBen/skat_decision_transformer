@@ -20,15 +20,23 @@ from online.agents import as_agent
 REWARD_CONVENTIONS = ("default", "thesis")
 
 
-def compute_target_returns(env: Env, point_reward: bool, scale: float = 1.0) -> List[float]:
+def compute_target_returns(env: Env, point_reward: bool, scale: float = 1.0, seat_agents=None) -> List[float]:
     """
     Initial return-to-go of each seat, as used in the self-play evaluation of the thesis.
 
     The maximum reward differs for defenders and declarer, so it is set to the double of the maximum possible.
+    Models trained on relabelled returns-to-go (config.rtg_mode) use the targets stored in their config instead.
     """
     target_return = [0.0] * 3
 
     for pl in range(3):
+        config = getattr(getattr(as_agent(seat_agents[pl]), "model", None), "config", None) \
+            if seat_agents is not None else None
+        if config is not None and getattr(config, "rtg_mode", "raw") != "raw":
+            role = "declarer" if env.game.players[pl] == env.game.get_declarer() else "defender"
+            target_return[pl] = config.rtg_targets[role]
+            continue
+
         if point_reward:
             target_return[pl] = env.get_game_value()
 

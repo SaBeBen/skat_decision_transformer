@@ -14,7 +14,7 @@ def _play_deal(seed, seat_models_fn, point_rewards, rtg_scale, card_enc, reward_
     first_states = env.online_reset(point_rewards=point_rewards, declaration=declaration)
     seat_models = seat_models_fn(env.game.get_declarer().get_id())
     return play_game(env, seat_models, first_states,
-                     compute_target_returns(env, point_rewards, rtg_scale), greedy=True,
+                     compute_target_returns(env, point_rewards, rtg_scale, seat_models), greedy=True,
                      reward_convention=reward_convention)
 
 
