@@ -676,8 +676,9 @@ def get_states_actions_rewards(
                 if current_player.type == Player.Type.DECLARER:
                     # add the points to the soloist
                     rewards[-1] = 0.9 * soloist_points + rewards[-1] * 0.1
-                elif env.game.has_declarer_won(env.game.skat[0].get_value() + env.game.skat[1].get_value() ):
-                    # give 40 discounted score points to the defenders after Fabian-Seeger score
+                elif won:
+                    # if the declarer lost, give 40 discounted score points to the defenders after Fabian-Seeger score
+                    # (as in Env.finish_online_game)
                     rewards[-1] = 0.9 * 40 + rewards[-1] * 0.1
             else:
                 # ...otherwise, give a 0 reward for lost and a positive reward for won games

@@ -317,7 +317,7 @@ def calculate_kinback_scheme(hand_cards: List[Card], pos: int) -> Tuple[int, int
             highest_score = kb_score
             trump = eval_trump
 
-    return kb_score, trump + 9
+    return highest_score, trump + 9
 
 
 class Env:
@@ -793,20 +793,27 @@ class Env:
 
         else:
 
-            highest_score, soloist_pos, i = 0, 0, 0
-
             soloist = None
             trump = -1
 
-            # determine the soloist with a scheme that allows a game
-            for player in self.game.players:
-                i += 1
-                # lets the player with the best scoring cards play
-                kb_score, trump_player = calculate_kinback_scheme(player.cards, i)
-                if kb_score > highest_score:
-                    highest_score = kb_score
-                    soloist = player
-                    trump = trump_player
+            while soloist is None:
+                highest_score, i = 0, 0
+
+                # determine the soloist with a scheme that allows a game
+                for player in self.game.players:
+                    i += 1
+                    # lets the player with the best scoring cards play
+                    kb_score, trump_player = calculate_kinback_scheme(player.cards, i)
+                    if kb_score > highest_score:
+                        highest_score = kb_score
+                        soloist = player
+                        trump = trump_player
+
+                if soloist is None:
+                    # nobody can play a game with these cards -> deal again
+                    self.game.reset()
+                    self.state_machine = GameStateMachine(GameStateStart(self.game))
+                    self.state_machine.handle_action(StartGameAction())
 
             self.state_machine.handle_action(BidCallAction(soloist, 18))
             self.state_machine.handle_action(
@@ -842,7 +849,7 @@ class Env:
                     self.pos_p[current_player_id][(current_player_id + 1) % 3], self.pos_p[current_player_id][
                         (current_player_id + 2) % 3] = -1, -1
                     put_card = [1]
-                elif self.game.get_declarer().get_id() == (current_player_id + 1 % 3):
+                elif self.game.get_declarer().get_id() == (current_player_id + 1) % 3:
                     self.pos_p[current_player_id][(current_player_id + 1) % 3] = -1
                     self.pos_p[current_player_id][(current_player_id + 2) % 3] = 1
                     put_card = [0]
@@ -863,11 +870,11 @@ class Env:
         # if the action is surrendering
         if card_index == -2:
             self.state_machine.handle_action(SurrenderAction(player=self.game.trick.get_current_player()))
-            reward = self.current_player.current_trick_points
+            reward = (current_player_id, self.game.players[current_player_id].current_trick_points)
             # pad the game state with 0s as a game-terminating signal
-            game_state = [[0] * self.state_dim]  # * (12 - self.game.round)]
-            # self.reset(current_player)
-            return game_state, reward, True
+            game_state = np.array([0] * self.state_dim)
+            # same signature as below: state, (reward_recipient_id, reward), done, next_player_id
+            return game_state, reward, True, current_player_id
 
         # the reward has to encode the winning player
         # default reward of 0
@@ -1007,6 +1014,33 @@ class Env:
 
         # Return state, reward, done
         return np.array(game_state), reward, done, next_player_id
+
+    def legal_actions(self, current_player_id) -> np.ndarray:
+        """
+        Legal actions of a player in the online environment as a mask over the 12 hand positions.
+
+        During Skat putting, the declarer can put any hand card and the defenders cannot act.
+        Afterward, the rules of the game engine decide (follow suit/trump), see Trick.is_valid_card_move.
+
+        :param current_player_id: id of the player to act.
+        :return: array of length ACT_DIM, 1 if the card at the hand position can be played, 0 if not.
+        """
+        mask = np.zeros(ACT_DIM, dtype=np.int8)
+        player = self.game.players[current_player_id]
+
+        if not self.skat_put[1]:
+            if player == self.game.get_declarer() and not self.hand:
+                mask[:len(player.cards)] = 1
+            return mask
+
+        if not self.game.trick.can_move(player):
+            return mask
+
+        for i, card in enumerate(player.cards):
+            if self.game.trick.is_valid_card_move(self.game.game_variant, player, card):
+                mask[i] = 1
+
+        return mask
 
     def update_state(self, game_state):
         # padding without padding cards in environment
