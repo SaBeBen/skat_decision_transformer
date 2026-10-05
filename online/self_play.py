@@ -14,7 +14,7 @@ from typing import List, Optional
 import numpy as np
 import torch
 
-from dt_skat_environment.environment import Env, ACT_DIM, MAX_EPISODE_LENGTH
+from dt_skat_environment.environment import Env, ACT_DIM, MAX_EPISODE_LENGTH, hidden_card_labels
 from online.agents import as_agent
 
 REWARD_CONVENTIONS = ("default", "thesis")
@@ -119,6 +119,7 @@ def play_game(env: Env,
     rewards = [[] for _ in range(3)]
     rtg = [[float(target_returns[pl])] for pl in range(3)]
     legal_masks = [[] for _ in range(3)]
+    hidden_labels = [[] for _ in range(3)]
 
     mismatches, decisions = 0, 0
     put_card_points = 0
@@ -127,6 +128,7 @@ def play_game(env: Env,
         nonlocal mismatches, decisions
         legal = env.legal_actions(player_id)
         legal_masks[player_id][-1] = legal
+        hidden_labels[player_id][-1] = hidden_card_labels(env.game, env.game.players[player_id], env.hand)
         agent = seat_agents[player_id]
         trajectory = {"states": states[player_id], "actions": actions[player_id], "rewards": rewards[player_id],
                       "rtg": rtg[player_id], "legal": legal_masks[player_id]}
@@ -141,6 +143,7 @@ def play_game(env: Env,
             actions[pl].append(np.zeros(ACT_DIM, dtype=np.float32))
             rewards[pl].append(0.0)
             legal_masks[pl].append(np.zeros(ACT_DIM, dtype=np.int8))
+            hidden_labels[pl].append(hidden_card_labels(env.game, env.game.players[pl], env.hand))
 
         next_states = [None, None, None]
 
@@ -213,6 +216,7 @@ def play_game(env: Env,
         "actions": np.stack(actions[pl]),
         "rewards": np.asarray(rewards[pl], dtype=np.float32),
         "legal": np.stack(legal_masks[pl]),
+        "hidden": np.stack(hidden_labels[pl]),
     } for pl in range(3)]
 
     return {

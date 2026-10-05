@@ -3,13 +3,14 @@ import time
 from dataclasses import dataclass
 from typing import Dict, Union, Optional, List, Any, Tuple
 
+import numpy as np
 import torch
 
 from datasets import Dataset
 from torch import nn
 from torch import Tensor
 
-from transformers import DecisionTransformerModel, Trainer
+from transformers import DecisionTransformerConfig, DecisionTransformerModel, Trainer
 
 from transformers.trainer_utils import speed_metrics, IntervalStrategy
 from transformers.utils import ModelOutput
@@ -47,6 +48,10 @@ class CustomDecisionTransformerOutput(ModelOutput):
         loss
         entropy
             Mean entropy of the action distribution at the time steps where a card can be played.
+        hidden_preds (`torch.FloatTensor` of shape `(batch_size, sequence_length, 32, 3)`, *optional*):
+            Logits of the location of every card (left opponent, right opponent, Skat), if config.hidden_card_head.
+        hidden_loss, hidden_accuracy
+            Cross-entropy and accuracy of the hidden card predictions on the unseen cards.
     """
 
     state_preds: torch.FloatTensor = None
@@ -57,12 +62,20 @@ class CustomDecisionTransformerOutput(ModelOutput):
     last_hidden_state: torch.FloatTensor = None
     loss: torch.FloatTensor = None
     entropy: torch.FloatTensor = None
+    hidden_preds: torch.FloatTensor = None
+    hidden_loss: torch.FloatTensor = None
+    hidden_accuracy: torch.FloatTensor = None
 
 
 class TrainableDT(DecisionTransformerModel):
     def __init__(self, config, use_mask):
         super().__init__(config)
         self.use_mask = use_mask
+
+        # auxiliary head predicting where the unseen cards are (left opponent, right opponent, Skat)
+        if getattr(config, "hidden_card_head", False):
+            self.predict_hidden = nn.Linear(config.hidden_size, 32 * 3)
+            self.predict_hidden.apply(self._init_weights)
 
     def original_forward(
             self,
@@ -76,10 +89,13 @@ class TrainableDT(DecisionTransformerModel):
             output_attentions=None,
             return_dict=None,
             action_mask=None,
+            hidden_labels=None,
     ) -> Union[Tuple, CustomDecisionTransformerOutput]:
         """
         :param action_mask: optional legal actions of the game engine per time step (batch, seq, act_dim). If given,
             it replaces the rule mask derived from the one-hot state representation (which only supports suit games).
+        :param hidden_labels: optional locations of the unseen cards per time step (batch, seq, 32) with the classes
+            0 (left opponent), 1 (right opponent), 2 (Skat) and -100 for known cards. Trains the hidden card head.
         """
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -287,6 +303,21 @@ class TrainableDT(DecisionTransformerModel):
 
         action_preds = action_preds_output * put_card_mask_zeros
 
+        hidden_preds, hidden_loss, hidden_accuracy = None, None, None
+        if hasattr(self, "predict_hidden"):
+            # predicted from the state token, like the action
+            hidden_preds = self.predict_hidden(x[:, 1]).reshape(batch_size, seq_length, 32, 3)
+            if hidden_labels is not None:
+                labels = hidden_labels.to(self.device).long()
+                labels = labels.masked_fill(attention_mask.to(self.device).unsqueeze(2) == 0, -100)
+                hidden_loss = nn.functional.cross_entropy(hidden_preds.reshape(-1, 3), labels.reshape(-1),
+                                                          ignore_index=-100)
+                known = labels.reshape(-1) != -100
+                hidden_accuracy = (hidden_preds.reshape(-1, 3)[known].argmax(dim=1) ==
+                                   labels.reshape(-1)[known]).float().mean()
+                if torch.isfinite(hidden_loss):
+                    loss = loss + getattr(self.config, "hidden_loss_weight", 1.0) * hidden_loss
+
         # for evaluation and online training
         if not return_dict:
             return state_preds, action_preds, return_preds
@@ -299,7 +330,10 @@ class TrainableDT(DecisionTransformerModel):
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
             loss=loss,
-            entropy=entropy
+            entropy=entropy,
+            hidden_preds=hidden_preds,
+            hidden_loss=hidden_loss,
+            hidden_accuracy=hidden_accuracy
         )
 
     def forward(self, **kwargs):
@@ -364,11 +398,24 @@ class TrainableDT(DecisionTransformerModel):
         # predictions have to be passed as tensors
         rate_oob_actions = Tensor([actions_oob.shape[0] / action_targets.shape[0]])
 
-        return {"loss": loss,
-                "probability_of_correct_action": prob_correct_action,
-                "rate_wrong_action_taken": rate_wrong_action_taken,
-                "rate_oob_actions": rate_oob_actions
-                }
+        metrics = {"loss": loss,
+                   "probability_of_correct_action": prob_correct_action,
+                   "rate_wrong_action_taken": rate_wrong_action_taken,
+                   "rate_oob_actions": rate_oob_actions
+                   }
+        if output.hidden_accuracy is not None:
+            metrics["hidden_card_accuracy"] = output.hidden_accuracy.detach()
+        return metrics
+
+
+def load_trainable_dt(path, use_mask=True, **config_overrides) -> TrainableDT:
+    """
+    Loads a (pre-trained) model from safetensors. Config overrides can add heads, which are initialised randomly.
+    """
+    config = DecisionTransformerConfig.from_pretrained(path)
+    for key, value in config_overrides.items():
+        setattr(config, key, value)
+    return TrainableDT.from_pretrained(path, config=config, use_mask=use_mask, use_safetensors=True)
 
 
 class DTTrainer(Trainer):
@@ -399,6 +446,9 @@ class DTTrainer(Trainer):
         #     start_time += output.metrics[f"{metric_key_prefix}_jit_compilation_time"]
 
         # injected behaviour
+        if len(output.predictions) > 4:
+            output.metrics["eval_hidden_card_accuracy"] = round(float(np.mean(output.predictions[4])), 4)
+
         if len(output.predictions[0].shape) != 0:
             output.metrics.update(
                 {"eval_loss": round(float(output.predictions[0][-1]), 4),
@@ -475,6 +525,8 @@ class DTTrainer(Trainer):
             metrics["probability_of_correct_action"] = outputs["probability_of_correct_action"]
             metrics["rate_wrong_action_taken"] = outputs["rate_wrong_action_taken"]
             metrics["rate_oob_actions"] = outputs["rate_oob_actions"]
+            if "hidden_card_accuracy" in outputs:
+                metrics["hidden_card_accuracy"] = round(float(outputs["hidden_card_accuracy"]), 4)
 
             self.log(metrics)
 

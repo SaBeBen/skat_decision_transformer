@@ -33,6 +33,11 @@ python experiments.py --championship "wc" --games 0 10000
 By default, suit, grand and null games are used. The thesis only trained on suit games, which corresponds to
 `--include_grand False --include_null False --reward_convention thesis`.
 
+With `--hidden_card_head True`, the DT additionally learns where the cards it cannot see are (left opponent, right
+opponent or Skat). The data pipeline records these locations for every time step and the cross-entropy of the
+prediction is added to the loss with `--hidden_loss_weight`. The auxiliary task shapes the representation of the state
+towards inferring the hidden cards, which is crucial in Skat.
+
 For more information about the options:
 
 ````shell

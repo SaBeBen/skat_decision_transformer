@@ -158,3 +158,30 @@ def test_declared_variants(game, hand):
         skat_points = sum(card.get_value() for card in env.game.skat)
         assert sum(p.sum_trick_values() for p in env.game.players) + skat_points == 120
         assert result["game_points"][declarer] != 0
+
+
+def test_hidden_card_labels():
+    from online.agents import RandomAgent
+    from online.self_play import play_game, compute_target_returns
+
+    random.seed(5)
+    env = Env("one-hot")
+    states = env.online_reset()
+    declarer = env.game.get_declarer().get_id()
+    result = play_game(env, [RandomAgent(np.random.default_rng(pl)) for pl in range(3)], states,
+                       compute_target_returns(env, True))
+
+    for pl, trajectory in enumerate(result["trajectories"]):
+        hidden = trajectory["hidden"]
+        assert hidden.shape == (12, 32)
+        known = (hidden != -100).sum(axis=1)
+        if pl == declarer:
+            # 20 cards of the defenders, the Skat is known
+            assert known[0] == 20 and not (hidden == 2).any()
+        else:
+            # 12 cards of the declarer (before putting) and 10 of the other defender
+            assert known[0] == 22
+            # afterwards, the two put cards are in the Skat
+            assert (hidden[2] == 2).sum() == 2
+        # fewer unseen cards in later tricks
+        assert known[-1] < known[2]

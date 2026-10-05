@@ -55,9 +55,10 @@ class DecisionTransformerSkatDataCollator:
 
         # a batch of dataset features
         s, a, r, rtg, timesteps, mask = [], [], [], [], [], []
-        # optional information per time step: legal actions from the game engine
-        legal = []
+        # optional information per time step: legal actions from the game engine and locations of unseen cards
+        legal, hidden = [], []
         use_legal = all("legal" in features[int(ind)] for ind in batch_inds)
+        use_hidden = all("hidden" in features[int(ind)] for ind in batch_inds)
 
         for ind in batch_inds:
 
@@ -108,6 +109,9 @@ class DecisionTransformerSkatDataCollator:
                 legal.append(np.concatenate([np.zeros((1, self.max_len - tlen, self.act_dim)),
                                              np.array(feature["legal"][0:si]).reshape((1, -1, self.act_dim))],
                                             axis=1))
+            if use_hidden:
+                hidden.append(np.concatenate([np.full((1, self.max_len - tlen, 32), -100),
+                                              np.array(feature["hidden"][0:si]).reshape((1, -1, 32))], axis=1))
 
             rtg[-1] = np.concatenate([np.zeros((1, self.max_len - tlen, 1)), rtg[-1]], axis=1)  # / self.scale
             timesteps[-1] = np.concatenate([np.zeros((1, self.max_len - tlen)), timesteps[-1]], axis=1)
@@ -130,5 +134,7 @@ class DecisionTransformerSkatDataCollator:
         }
         if use_legal:
             batch["action_mask"] = torch.from_numpy(np.concatenate(legal, axis=0)).float()
+        if use_hidden:
+            batch["hidden_labels"] = torch.from_numpy(np.concatenate(hidden, axis=0)).long()
 
         return batch

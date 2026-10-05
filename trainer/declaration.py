@@ -14,7 +14,7 @@ import torch
 from torch import nn
 from transformers import DecisionTransformerConfig, DecisionTransformerModel
 
-from dt_skat_environment.card_representation_conversion import convert_numerical_to_card
+from dt_skat_environment.card_representation_conversion import convert_numerical_to_card, CARD_INDEX
 from dt_skat_environment.environment import get_peaks
 from dt_skat_environment.game_engine.game.game_variant import GameVariantNull
 from dt_skat_environment.game_engine.model.card import Card
@@ -28,9 +28,6 @@ DECLARATION_STATE_DIM = 32 + 3  # dealt hand + seat (fore-hand, middle-hand, rea
 BID_VALUES = [18, 20, 22, 23, 24, 27, 30, 33, 35, 36, 40, 44, 45, 46, 48, 50, 54, 55, 59, 60, 63, 66, 70, 72, 77, 80,
               81, 84, 88, 90, 96, 99, 100, 108, 110, 117, 120, 121, 126, 130, 132, 135, 140, 143, 144, 150, 153, 154,
               156, 160, 162, 165, 168, 170, 176, 180, 187, 192, 198, 204, 216, 240, 264]
-
-# index of a card in the hand encoding (same numbering as the data)
-CARD_INDEX = {convert_numerical_to_card(i): i for i in range(32)}
 
 
 def declaration_index(game: int, hand: bool) -> int:

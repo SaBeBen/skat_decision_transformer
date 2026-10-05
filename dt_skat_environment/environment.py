@@ -5,7 +5,8 @@ import numpy as np
 import torch
 
 from dt_skat_environment.game_engine import exceptions
-from dt_skat_environment.card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, convert_numerical_to_enc
+from dt_skat_environment.card_representation_conversion import convert_numerical_to_card, convert_card_to_enc, \
+    convert_numerical_to_enc, CARD_INDEX
 
 from dt_skat_environment.game_engine.game.game import Game
 from dt_skat_environment.game_engine.game.game_state_machine import GameStateMachine
@@ -317,6 +318,31 @@ def legal_card_mask(game: Game, player: Player, putting: bool = False) -> np.nda
         if game.trick.is_valid_card_move(game.game_variant, player, card):
             mask[i] = 1
     return mask
+
+
+# locations of unseen cards relative to a player
+HIDDEN_LEFT, HIDDEN_RIGHT, HIDDEN_SKAT, HIDDEN_IGNORE = 0, 1, 2, -100
+
+
+def hidden_card_labels(game: Game, player: Player, hand: bool = False) -> np.ndarray:
+    """
+    Location of every card the player cannot see: left opponent (next seat), right opponent or Skat.
+    Cards on the own hand, played cards and the Skat known to the declarer are ignored (-100).
+
+    :return: array of length 32 in the card numbering of the data (see CARD_INDEX).
+    """
+    labels = np.full(32, HIDDEN_IGNORE, dtype=np.int8)
+    left = game.players[(player.get_id() + 1) % 3]
+    right = game.players[(player.get_id() + 2) % 3]
+    for card in left.cards:
+        labels[CARD_INDEX[card]] = HIDDEN_LEFT
+    for card in right.cards:
+        labels[CARD_INDEX[card]] = HIDDEN_RIGHT
+    # the declarer knows the Skat, unless playing hand
+    if not (player == game.get_declarer() and not hand):
+        for card in game.skat:
+            labels[CARD_INDEX[card]] = HIDDEN_SKAT
+    return labels
 
 
 def pad_steps(rows: list, width: int, dtype=np.int8, fill=0) -> np.ndarray:

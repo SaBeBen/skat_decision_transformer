@@ -25,7 +25,7 @@ from sklearn.model_selection import train_test_split
 from transformers import TrainingArguments, DecisionTransformerConfig
 
 import data_pipeline
-from trainer.dt_trainer import TrainableDT, DTTrainer
+from trainer.dt_trainer import TrainableDT, DTTrainer, load_trainable_dt
 from trainer.inference import get_action
 from utils import str2bool
 from trainer.declaration import DeclarationDT, DeclarationPolicy, declarations_from_data, train_declaration_model
@@ -66,6 +66,8 @@ def run_training(args):
     save_model = args['save_model']
     pretrained_model_path = args['pretrained_model']
     eval_in_training = args['eval_in_training']
+    # auxiliary prediction of the unseen cards
+    head_kwargs = {"hidden_card_head": args['hidden_card_head'], "hidden_loss_weight": args['hidden_loss_weight']}
 
     if torch.cuda.is_available() and use_cuda:
         device = torch.device('cuda')
@@ -130,6 +132,7 @@ def run_training(args):
         embd_pdrop=dropout,
         resid_pdrop=dropout,
         attn_pdrop=dropout,
+        **head_kwargs,
     )
 
     if pretrained_model_path is not None:
@@ -137,7 +140,8 @@ def run_training(args):
 
         # uses a mask when employing one-hot encoding
         use_mask = hand_encoding == "one-hot"
-        pretrained_model = TrainableDT.from_pretrained(pretrained_model_path, use_mask=use_mask, use_safetensors=True)
+        # new heads of a pre-trained model are initialised randomly
+        pretrained_model = load_trainable_dt(pretrained_model_path, use_mask=use_mask, **head_kwargs)
         model = pretrained_model
 
         if model.config.state_dim != state_dim:
@@ -705,6 +709,10 @@ if __name__ == '__main__':
                         choices=['mixed', 'mixed_comp', 'one-hot', 'one-hot_comp'],
                         help='The encoding of cards in the state.')
 
+    parser.add_argument('--hidden_card_head', type=str2bool, default=False,
+                        help='Add an auxiliary head that predicts the locations of the unseen cards.')
+    parser.add_argument('--hidden_loss_weight', type=float, default=0.5,
+                        help='Weight of the hidden card loss relative to the action loss.')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--n_layer', type=int, default=2, help='number of hidden layers')
     parser.add_argument('--n_head', type=int, default=1, help='number of attention heads')

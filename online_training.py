@@ -29,7 +29,7 @@ from online.odt import ODTUpdater
 from online.replay_buffer import TrajectoryReplayBuffer
 from online.self_play import play_game, compute_target_returns
 from trainer.data_collator import DecisionTransformerSkatDataCollator
-from trainer.dt_trainer import TrainableDT
+from trainer.dt_trainer import load_trainable_dt
 from trainer.declaration import DeclarationDT, DeclarationPolicy
 from utils import str2bool
 
@@ -96,7 +96,8 @@ def run_online_training(args):
 
     _, _, state_dim = get_dims_in_enc(CARD_ENC)
 
-    learner = TrainableDT.from_pretrained(args["pretrained_model"], use_mask=True, use_safetensors=True).to(device)
+    head_kwargs = {"hidden_card_head": True, "hidden_loss_weight": args["hidden_loss_weight"]}         if args["hidden_card_head"] else {}
+    learner = load_trainable_dt(args["pretrained_model"], use_mask=True, **head_kwargs).to(device)
     if learner.config.state_dim != state_dim:
         raise ValueError("The pre-trained model does not use the one-hot state representation.")
 
@@ -264,6 +265,9 @@ def get_parser():
                         help='Whether to use discounted Seeger-Fabian score as rewards')
     parser.add_argument('--reward_convention', type=str, default='default', choices=['default', 'thesis'],
                         help='"thesis" reproduces the rewards the models of the thesis were trained with.')
+    parser.add_argument('--hidden_card_head', type=str2bool, default=False,
+                        help='Train an auxiliary head predicting the unseen cards (added if the model has none).')
+    parser.add_argument('--hidden_loss_weight', type=float, default=0.5)
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', '-wd', type=float, default=5e-4)
     parser.add_argument('--warmup_steps', type=int, default=1000)

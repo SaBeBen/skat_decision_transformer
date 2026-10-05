@@ -547,3 +547,7 @@ all_cards = [
     [1, 0, 0, 0, 2],  # 8♦
     [1, 0, 0, 0, 1]  # 7♦
 ]
+
+
+# index of every card in the numbering of the data (0: A of clubs ... 31: 7 of diamonds)
+CARD_INDEX = {convert_numerical_to_card(i): i for i in range(32)}
