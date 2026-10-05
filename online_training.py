@@ -30,18 +30,9 @@ from online.replay_buffer import TrajectoryReplayBuffer
 from online.self_play import play_game, compute_target_returns
 from trainer.data_collator import DecisionTransformerSkatDataCollator
 from trainer.dt_trainer import TrainableDT
+from utils import str2bool
 
 CARD_ENC = "one-hot"  # the rule mask of the model (and the pre-trained models) require the one-hot encoding
-
-
-def str2bool(value):
-    if isinstance(value, bool):
-        return value
-    if value.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    if value.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
 def collect_games(learner, pool, n_games, args, rng, game_counter):

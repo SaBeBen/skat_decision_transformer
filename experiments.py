@@ -27,6 +27,7 @@ from transformers import TrainingArguments, DecisionTransformerConfig
 import data_pipeline
 from trainer.dt_trainer import TrainableDT, DTTrainer
 from trainer.inference import get_action
+from utils import str2bool
 from online.agents import HumanAgent, RandomAgent
 from online.self_play import play_game, compute_target_returns
 from dt_skat_environment.environment import ACT_DIM, get_dims_in_enc, Env, MAX_EPISODE_LENGTH
@@ -655,7 +656,7 @@ if __name__ == '__main__':
                         help='Get the game from the amount of perspectives.'
                              'Note that the dataset will be split into test and train,',
                         choices=[(0, 1, 2), (0, 1), 0])  # choices=[(0, 1, 2), (0, 1), (0, 2), (1, 2), 1, 2, 3])
-    parser.add_argument('--point_rewards', type=bool, default=True,
+    parser.add_argument('--point_rewards', type=str2bool, default=True,
                         help='Whether to use discounted Seeger-Fabian score as rewards')
     parser.add_argument('--reward_convention', type=str, default='default', choices=['default', 'thesis'],
                         help='"thesis" reproduces the rewards of the thesis (the put Skat is rewarded twice). '
@@ -674,19 +675,19 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_ratio', type=float, default=0.1)
     parser.add_argument('--num_epochs', type=int, default=240)
-    parser.add_argument('--use_cuda', type=bool, default=True)
-    parser.add_argument('--save_model', type=bool, default=False,
+    parser.add_argument('--use_cuda', type=str2bool, default=True)
+    parser.add_argument('--save_model', type=str2bool, default=False,
                         help='Whether to save the model. '
                              'If true, the trained model will be saved to "pretrained_models"')
     parser.add_argument('--logging_steps', type=int, default=500)
-    parser.add_argument('--eval_in_training', type=bool, default=True,
+    parser.add_argument('--eval_in_training', type=str2bool, default=True,
                         help="Whether to evaluate during training. Slows down training if activated."
                              "Evaluation takes place on the test portion of the dataset (#_games_to_load * 0.2).")
     parser.add_argument('--pretrained_model', type=file_check,
                         # default="games_all-encoding_one-hot-point_rewards_True-card_put-masked-Thu_Sep__7_22-41-35_2023",
                         help="Takes relative path as argument for the pretrained model which should be used. "
                              "The model has to be stored in the folder 'pretrained_models'.")
-    parser.add_argument('--online_eval', type=bool, default=False,
+    parser.add_argument('--online_eval', type=str2bool, default=False,
                         help="Uses the pre-trained model to play online against itself."
                              " Rules out further training and evaluation of model.")
     parser.add_argument('--play_as', type=int, default=None, choices=[0, 1, 2],
@@ -695,7 +696,7 @@ if __name__ == '__main__':
     parser.add_argument('--amount_games_to_play', type=int, default=20000,
                         help='The amount of games you want to play yourself. The deals are from a pseudo random shuffle'
                              'and independent of the data.')
-    parser.add_argument('--random_player', type=bool, default=False,
+    parser.add_argument('--random_player', type=str2bool, default=False,
                         help="Whether to include a random player in online evaluation. "
                              "The random player will sit in place of the human.")
 
