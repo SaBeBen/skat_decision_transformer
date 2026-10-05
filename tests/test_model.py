@@ -95,3 +95,10 @@ def test_model_mask_agrees_with_game_engine(model_dir):
             assert trajectory["rewards"].shape == (12,)
             # at most one card per time step
             assert set(np.unique(trajectory["actions"].sum(axis=1))) <= {0.0, 1.0}
+
+
+def test_training_loss_is_the_action_nll():
+    model = TrainableDT.from_pretrained(MODEL_DIRS[0], use_mask=True, use_safetensors=True)
+    batch = dummy_batch(model.config.state_dim)
+    output = model.original_forward(**batch, return_dict=True)
+    assert torch.equal(model(**batch)["loss"], output.loss)

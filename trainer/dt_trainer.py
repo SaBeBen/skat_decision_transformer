@@ -305,14 +305,14 @@ class TrainableDT(DecisionTransformerModel):
     def forward(self, **kwargs):
         output = self.original_forward(**kwargs)
 
-        action_preds = output[1]
+        action_preds = output.action_preds
         action_targets = kwargs['actions']
         attention_mask = kwargs['attention_mask']
         action_targets = action_targets.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
         action_preds = action_preds.reshape(-1, ACT_DIM)[attention_mask.reshape(-1) > 0]
 
         # Cross-entropy loss is already calculated in original forward
-        loss = output[-1]
+        loss = output.loss
 
         # cross entropy loss
         # cross_ent_fct = nn.CrossEntropyLoss()
