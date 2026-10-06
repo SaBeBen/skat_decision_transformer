@@ -140,12 +140,13 @@ Each iteration of [online_training.py](online_training.py)
    `--learner_seat_prob`, otherwise by a frozen opponent from a pool containing the pre-trained model, a rule-based
    player (`--rule_opponent`) and snapshots of the learner (`--snapshot_every`, `--pool_size`). With
    `--opponent_sampling pfsp`, opponents the learner loses against are sampled more often (prioritised fictitious
-   self-play). The learner samples its actions from its policy, restricted to the
-   legal cards of the game engine ([online/self_play.py](online/self_play.py)),
+   self-play). The learner samples its actions from its policy, restricted to the legal cards of the game engine. All
+   games of an iteration are played in lockstep, so the predictions of a model are batched across games
+   ([online/self_play.py](online/self_play.py)),
 2. adds the learner's trajectories to a FIFO replay buffer ([online/replay_buffer.py](online/replay_buffer.py)), which
    is initially seeded with offline games (`--offline_games`). With `--buffer_filter_quantile`, only trajectories whose
-   return reaches this quantile of the recent returns of their role are kept (selective expert iteration). The returns-to-go are computed from the achieved rewards
-   (hindsight return relabelling),
+   return reaches this quantile of the recent returns of their role are kept (selective expert iteration). The
+   returns-to-go are computed from the achieved rewards (hindsight return relabelling),
 3. performs `--updates_per_iter` gradient steps with the ODT objective: the negative log-likelihood of the buffer's
    actions with a lower bound on the policy entropy (`--target_entropy`), enforced by a learned temperature
    ([online/odt.py](online/odt.py)),
@@ -158,6 +159,26 @@ pre-trained model), checkpoints are saved to `training_output/online-*`. The def
 quick test on a CPU use e.g.
 `--iterations 2 --games_per_iter 16 --updates_per_iter 20 --eval_games 20 --offline_games 0 100`.
 See `python online_training.py --help` for all options.
+
+## Training a complete player
+
+The included pre-trained models predate the improvements above: they were trained on suit games only, with the reward
+convention of the thesis and without the hidden card head. A complete player (all game variants, bidding, relabelled
+returns-to-go and online fine-tuning) is trained in four steps, ideally on a GPU server:
+
+````shell
+# 1. return model for the relabelling of the returns-to-go
+python experiments.py --train_return_model deal_margin --games 0 -1 --num_epochs 20 --batch_size 512
+# 2. offline DT on all games with hidden card head, suit permutations and relabelled returns-to-go
+python experiments.py --games 0 -1 --num_epochs 240 --hidden_card_head True --augment_prob 0.5 --rtg_mode deal_margin --return_model "<return model>" --save_model True
+# 3. bidding and declaration
+python experiments.py --train_declaration True --games 0 -1 --num_epochs 20 --batch_size 256
+# 4. online fine-tuning via self-play, also fine-tuning the bidding
+python online_training.py --pretrained_model "<DT from step 2>" --declaration_model "<model from step 3>" --finetune_declaration True --augment_prob 0.5 --buffer_filter_quantile 0.2
+````
+
+Every step can be evaluated against the previous model, the rule-based or the random player with `--duplicate_eval`
+(add `--declaration_model` to evaluate with bidding).
 
 ## Security
 
@@ -237,7 +258,7 @@ continuous and cyclic movement allows splitting the movement into more timesteps
 The trainer logs to [training-logs](training-logs) and saves training checkpoints to [training_output](training_output).
 Furthermore, there is an option to save a model as a pre-trained model in [pre-trained_models](pretrained_models).
 One pre-trained model exists with which experiments can be carried out. It was trained on all non-surrendered suit games
-of the world championship data. 
+of the world championship data with the reward convention of the thesis (use `--reward_convention thesis`). 
 294 752 games from every perspective with 240 epochs. 
 We used it for our playing experiments.
 Also, there are two smaller models which only include 20000 or 50000 of these non-surrendered suit games, also trained.
@@ -257,11 +278,16 @@ experiments.py defines the experiments. With the help of an argument parser, we 
 (with their functions the main function calls):
 
 - Training (run_training)
+- Training of a return model for the relabelling of the returns-to-go (run_return_model_training)
+- Training of the bidding and declaration model (run_declaration_training)
 - (deactivated) manual evaluation (evaluate_in_env)
 - Playing against
     - Itself (run_online_eval)
     - A random player (play_with_two)
     - It as a human (play_with_two)
+- Duplicate evaluation against another model, a rule-based or a random player (run_duplicate_eval)
+
+The online fine-tuning is started with [online_training.py](online_training.py).
 
 # Workflow of Experiments
 
@@ -280,9 +306,10 @@ The functions to call are in brackets.
     6. Train model
     7. (optionally) save model (is not saved by default)
 
-The HF trainer is part of our custom DT trainer. We alter the forward function to apply a mask for valid actions
-specifically for the one-hot encoding. Further, we manipulate the logging in the forward, evaluate and training_step
-methods to log own metrics, such as the probability of correct actions.
+The HF trainer is part of our custom DT trainer. We alter the forward function to apply the legal actions of the game
+engine as a mask (or, for older datasets, a rule mask specific for the one-hot encoding) and to add the optional hidden
+card loss. Further, we manipulate the logging in the forward, evaluate and training_step methods to log own metrics, such
+as the probability of correct actions and the accuracy of the hidden card predictions.
 
 ### Playing against itself (run_online_eval)
 
@@ -297,7 +324,7 @@ methods to log own metrics, such as the probability of correct actions.
 2. Load dimensions
 3. Load pre-trained model
 4. Play with two agents based on the pre-trained model over 12 timesteps from every perspective (play_with_two_agents)
-    - Differs between a random player and human player through if-conditions while playing
+    - The random or human player is an agent in the shared game loop ([online/agents.py](online/agents.py))
 
 ### Manual implementation (evaluate_in_env) (deactivated, kept for debugging usage)
 
